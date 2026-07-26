@@ -57,6 +57,7 @@ let drugs: Drug[] = []
 let loadingDrugs = true
 let loadError = ''
 let query = ''
+let searchFocused = false
 let step = 1
 let items: PrescriptionDrug[] = []
 let submitting = false
@@ -285,8 +286,7 @@ function successStep() {
       <div class="success-card">
         <span class="success-icon">${icon('check')}</span>
         <p class="eyebrow">PRESCRIPTION SAVED</p>
-        <h2>Prescription created successfully</h2>
-        <p>Prescription <strong>#RX-240719-084</strong> has been saved for your patient. You can now share it or start a new one.</p>
+        <p>Prescription saved successfully. You can now share it or create a new prescription.</p>
         <button class="primary" data-action="new-prescription">Create another prescription ${icon('plus')}</button>
       </div>
 
@@ -334,6 +334,14 @@ function syncSearchSuggestions() {
   const empty = document.querySelector<HTMLElement>('#drug-empty')
   if (!results || !empty) return
 
+  if (!searchFocused) {
+    results.innerHTML = ''
+    results.style.display = 'none'
+    empty.innerHTML = ''
+    empty.style.display = 'none'
+    return
+  }
+
   const matches = findMatches(query)
 
   results.innerHTML = matches
@@ -348,6 +356,7 @@ function syncSearchSuggestions() {
     )
     .join('')
 
+  results.style.display = matches.length ? 'block' : 'none'
   empty.style.display = query.trim() && !matches.length ? 'block' : 'none'
   empty.textContent = query.trim() && !matches.length ? 'No medicines matched your search. Try a generic or brand name.' : ''
 }
@@ -408,7 +417,7 @@ function renderCatalogue(catalogue: Drug[]) {
       ${catalogue
         .map(
           drug => `
-            <article class="catalogue-card">
+            <article class="catalogue-card" data-action="add-drug" data-id="${drug.id}">
               <div>
                 <strong>${escapeHtml(drug.name)}</strong>
                 <small>${escapeHtml(drug.strength || 'Strength not listed')}</small>
@@ -551,12 +560,26 @@ async function submitPrescription() {
 }
 
 function syncDrugField(target: HTMLInputElement | HTMLSelectElement) {
-  const item = items.find(entry => entry.id === target.dataset.id)
+  const id = target.dataset.id
+  const item = items.find(entry => entry.id === id)
   const field = target.dataset.field as keyof Pick<PrescriptionDrug, 'dosage' | 'frequency' | 'duration' | 'note'> | undefined
   if (!item || !field) return
 
+  const selectionStart = target instanceof HTMLInputElement ? target.selectionStart : null
+  const selectionEnd = target instanceof HTMLInputElement ? target.selectionEnd : null
+
   item[field] = target.value
   render()
+
+  const replacement = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field]')].find(
+    element => element.dataset.id === id && element.dataset.field === field,
+  )
+  if (!replacement) return
+
+  replacement.focus()
+  if (replacement instanceof HTMLInputElement && selectionStart !== null && selectionEnd !== null) {
+    replacement.setSelectionRange(selectionStart, selectionEnd)
+  }
 }
 
 app.addEventListener('input', event => {
@@ -570,8 +593,48 @@ app.addEventListener('input', event => {
   }
 
   if (target.matches('[data-field]')) {
+    searchFocused = false
     syncDrugField(target)
   }
+})
+
+app.addEventListener('focusin', event => {
+  const target = event.target as HTMLElement | null
+  if (target?.id !== 'drug-search') return
+
+  searchFocused = true
+  syncSearchSuggestions()
+})
+
+app.addEventListener('focusout', event => {
+  const target = event.target as HTMLElement | null
+  if (target?.id !== 'drug-search') return
+
+  window.setTimeout(() => {
+    searchFocused = false
+    syncSearchSuggestions()
+  }, 150)
+})
+
+function addDrugToPrescription(id: string) {
+  const drug = drugs.find(entry => entry.id === id)
+  if (!drug) return false
+
+  items = [...items, { ...drug, dosage: '', frequency: '', duration: '', note: '', selectedGeneric: drug.generics[0] ?? drug.name }]
+  query = ''
+  searchFocused = false
+  render()
+  return true
+}
+
+app.addEventListener('pointerdown', event => {
+  const target = event.target as HTMLElement | null
+  const result = target?.closest<HTMLElement>('#drug-results [data-action="add-drug"][data-id]')
+  const id = result?.dataset.id
+  if (!id) return
+
+  event.preventDefault()
+  addDrugToPrescription(id)
 })
 
 app.addEventListener('click', event => {
@@ -580,12 +643,7 @@ app.addEventListener('click', event => {
   const id = target?.closest<HTMLElement>('[data-id]')?.dataset.id
 
   if (action === 'add-drug' && id) {
-    const drug = drugs.find(entry => entry.id === id)
-    if (!drug) return
-
-    items = [...items, { ...drug, dosage: '', frequency: '', duration: '', note: '', selectedGeneric: drug.generics[0] ?? drug.name }]
-    query = ''
-    render()
+    addDrugToPrescription(id)
     return
   }
 
