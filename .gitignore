@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.run/
+Frontend/node_modules/
+Frontend/dist/
+.vscode/
