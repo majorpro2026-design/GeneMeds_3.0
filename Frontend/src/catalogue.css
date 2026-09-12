@@ -149,6 +149,31 @@
 .get-rec-hint svg{width:15px}
 .get-rec-btn{font-size:13px;padding:10px 18px}
 
+/* Drug safety assessment */
+.rc-safety-section{margin:0 24px 16px;display:flex;flex-direction:column;gap:8px}
+.rc-safety-label{font:700 11px Manrope;color:#8290a0;letter-spacing:.7px;text-transform:uppercase;margin-bottom:2px}
+.rc-safety-row{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-radius:9px;border:1px solid transparent}
+.rc-safety--green{background:#f0fdf4;border-color:#bbf7d0}
+.rc-safety--blue{background:#eff6ff;border-color:#bfdbfe}
+.rc-safety--amber{background:#fffbeb;border-color:#fde68a}
+.rc-safety--gray{background:#f8fafc;border-color:#e2e8f0}
+.rc-safety-icon{flex-shrink:0;width:18px;height:18px;margin-top:1px}
+.rc-safety-icon svg{width:18px}
+.rc-safety--green .rc-safety-icon{color:#16a34a}
+.rc-safety--blue .rc-safety-icon{color:#2563eb}
+.rc-safety--amber .rc-safety-icon{color:#d97706}
+.rc-safety--gray .rc-safety-icon{color:#64748b}
+.rc-safety-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.rc-safety-body strong{font-size:13px;color:#1c3455}
+.rc-safety-gene{font-size:11px;color:#8290a0}
+.rc-safety-rationale{font-size:12px;color:#374151;line-height:1.4;margin-top:2px}
+.rc-alt-drug{color:#1d4ed8;font-weight:700;text-transform:capitalize}
+.rc-safety-badge{flex-shrink:0;font:700 10px Manrope;padding:4px 9px;border-radius:999px;letter-spacing:.3px;white-space:nowrap;align-self:flex-start;margin-top:1px}
+.rc-safety-badge--green{background:#dcfce7;color:#15803d}
+.rc-safety-badge--blue{background:#dbeafe;color:#1d4ed8}
+.rc-safety-badge--amber{background:#fef3c7;color:#92400e}
+.rc-safety-badge--gray{background:#f1f5f9;color:#475569}
+
 /* Responsive */
 @media(max-width:960px){.rp-layout{flex-direction:column}.rp-sidebar{width:100%;position:static}.entry-grid{grid-template-columns:1fr}}
 @media(max-width:720px){.gt3-head,.gt3-row{grid-template-columns:1fr 1fr;gap:8px}.gt3-cpic,.gt3-guide,.gt3-head span:nth-child(3),.gt3-head span:nth-child(4){display:none}}
