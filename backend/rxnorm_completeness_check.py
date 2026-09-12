@@ -4,16 +4,17 @@ GeneMed — Module 3 FINAL: Complete Alternate Drug Recommendation Table Builder
 """
 
 import json
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_HOST = "genemeds.cupgeqgu0vg9.us-east-1.rds.amazonaws.com"
-DB_PORT = 5432
-DB_NAME = "genemeds"
-DB_SCHEMA = "knowledge"
-DB_USER = "postgres"
-DB_PASSWORD = "genemedsdatabase"
+DB_HOST = os.getenv("DB_HOST", "")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("DB_NAME", "")
+DB_SCHEMA = os.getenv("DB_SCHEMA", "knowledge")
+DB_USER = os.getenv("DB_USER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 RISKY_PHENOTYPE_KEYWORDS = [
     "poor metabolizer",
