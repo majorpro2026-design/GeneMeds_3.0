@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import engine
 from app.services.drug_lookup import lookup_drug_genes
+from app.services.alternate_lookup import get_alternate_drug
 
 
 def _format_activity_score(score: Decimal | None) -> str | None:
@@ -343,6 +344,20 @@ def get_full_recommendation(
                 "assessmentId": assessment_id,
             }
 
+    # Build drugSafetyStatus — one entry per resolved gene/phenotype
+    drug_safety_status: list[dict[str, Any]] = []
+    for gene_symbol, ph in phenotype_details.items():
+        # Use activityScore as lookup key first, fallback to phenotypeName
+        lookup_phenotype = ph["activityScore"] if ph["activityScore"] is not None else ph["phenotypeName"]
+        if lookup_phenotype:
+            safety = get_alternate_drug(gene_symbol, lookup_phenotype, generic_name)
+            drug_safety_status.append({
+                "geneSymbol": gene_symbol,
+                "phenotypeName": ph["phenotypeName"],
+                "activityScore": ph["activityScore"],
+                **safety,
+            })
+
     response: dict[str, Any] = {
         "found": True,
         "genericName": generic_name,
@@ -350,6 +365,7 @@ def get_full_recommendation(
         "phenotypes": phenotype_details,
         "missingGeneData": missing_gene_data,
         "recommendation": recommendation,
+        "drugSafetyStatus": drug_safety_status,
     }
 
     if should_persist:
@@ -361,11 +377,34 @@ def get_full_recommendation(
 if __name__ == "__main__":
     import pprint
 
-    result = get_full_recommendation(
+    print("=== TEST 1: codeine + CYP2D6 *1/*1 (Normal Metabolizer, score=1.25 -> not_risky) ===")
+    result1 = get_full_recommendation(
         "codeine",
-        [{"geneSymbol": "CYP2D6", "diplotypeName": "*4/*4"}],
-        patient_id=1,
-        entered_by_doctor_id=1,
-        persist=True,
+        [{"geneSymbol": "CYP2D6", "diplotypeName": "*10/*13+*1"}],
     )
-    pprint.pprint(result)
+    pprint.pprint({
+        "recommendation": result1.get("recommendation", {}).get("drugRecommendation", "")[:80] if result1.get("recommendation") else None,
+        "drugSafetyStatus": result1.get("drugSafetyStatus"),
+    })
+
+    print()
+    print("=== TEST 2: atomoxetine + CYP2D6 *4/*4 (Poor Metabolizer, score=0.0) ===")
+    result2 = get_full_recommendation(
+        "atomoxetine",
+        [{"geneSymbol": "CYP2D6", "diplotypeName": "*4/*4"}],
+    )
+    pprint.pprint({
+        "recommendation": result2.get("recommendation", {}).get("drugRecommendation", "")[:80] if result2.get("recommendation") else None,
+        "drugSafetyStatus": result2.get("drugSafetyStatus"),
+    })
+
+    print()
+    print("=== TEST 3: mercaptopurine + TPMT *10/*10 (Poor Metabolizer -> no_alternative_documented) ===")
+    result3 = get_full_recommendation(
+        "mercaptopurine",
+        [{"geneSymbol": "TPMT", "diplotypeName": "*10/*10"}],
+    )
+    pprint.pprint({
+        "recommendation": result3.get("recommendation", {}).get("drugRecommendation", "")[:80] if result3.get("recommendation") else None,
+        "drugSafetyStatus": result3.get("drugSafetyStatus"),
+    })

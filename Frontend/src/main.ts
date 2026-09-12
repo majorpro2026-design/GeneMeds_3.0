@@ -46,6 +46,18 @@ type DrugApiItem = {
   sourceName?: string
 }
 
+type DrugSafetyStatus = {
+  geneSymbol: string
+  phenotypeName: string
+  activityScore: string | null
+  status: 'alternate_found' | 'no_alternative_documented' | 'not_risky' | 'unknown'
+  alternativeDrugGeneric: string | null
+  rationale: string | null
+  confidenceLevel: string | null
+  guidelineTitle: string | null
+  requiresClinicianReview: boolean
+}
+
 type RecommendationResult = {
   drugName: string
   found: boolean
@@ -61,6 +73,7 @@ type RecommendationResult = {
     comments?: string
     guidelineTitle?: string
   } | null
+  drugSafetyStatus?: DrugSafetyStatus[]
   savedRecordIds?: { resultIds: number[]; assessmentId: number | null }
 }
 
@@ -585,6 +598,54 @@ function renderRecommendationBlocks(): string {
           <div class="rc-no-rec-box">
             ${icon('warning')}
             <div>Missing diplotypes for a full recommendation: ${missing.map(g => `<span class="gene-chip">${escapeHtml(g)}</span>`).join(' ')}</div>
+          </div>` : ''}
+
+        ${(res.drugSafetyStatus ?? []).length ? `
+          <div class="rc-safety-section">
+            <div class="rc-safety-label">Drug Safety Assessment</div>
+            ${(res.drugSafetyStatus ?? []).map(ss => {
+              if (ss.status === 'not_risky') {
+                return `<div class="rc-safety-row rc-safety--green">
+                  <span class="rc-safety-icon">${icon('check')}</span>
+                  <div class="rc-safety-body">
+                    <strong>No genetic concern</strong>
+                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
+                  </div>
+                  <span class="rc-safety-badge rc-safety-badge--green">Not risky</span>
+                </div>`
+              }
+              if (ss.status === 'alternate_found') {
+                return `<div class="rc-safety-row rc-safety--blue">
+                  <span class="rc-safety-icon">${icon('info')}</span>
+                  <div class="rc-safety-body">
+                    <strong>Consider alternate: <span class="rc-alt-drug">${escapeHtml(ss.alternativeDrugGeneric ?? '')}</span></strong>
+                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
+                    ${ss.rationale ? `<span class="rc-safety-rationale">${escapeHtml(ss.rationale.substring(0, 180))}${ss.rationale.length > 180 ? '…' : ''}</span>` : ''}
+                  </div>
+                  <span class="rc-safety-badge rc-safety-badge--blue">CPIC Guideline</span>
+                </div>`
+              }
+              if (ss.status === 'no_alternative_documented') {
+                return `<div class="rc-safety-row rc-safety--amber">
+                  <span class="rc-safety-icon">${icon('warning')}</span>
+                  <div class="rc-safety-body">
+                    <strong>Risky — no specific alternate documented</strong>
+                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
+                    <span class="rc-safety-rationale">Consult the CPIC guideline before dispensing.</span>
+                  </div>
+                  <span class="rc-safety-badge rc-safety-badge--amber">Review needed</span>
+                </div>`
+              }
+              // unknown
+              return `<div class="rc-safety-row rc-safety--gray">
+                <span class="rc-safety-icon">${icon('info')}</span>
+                <div class="rc-safety-body">
+                  <strong>No safety data available</strong>
+                  <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
+                </div>
+                <span class="rc-safety-badge rc-safety-badge--gray">Unknown</span>
+              </div>`
+            }).join('')}
           </div>` : ''}
 
         <div class="rc-footer">
