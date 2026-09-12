@@ -196,14 +196,52 @@ def _collect_gene_symbols(resolved_drugs: list[dict[str, Any]]) -> list[str]:
 	return gene_symbols
 
 
-def lookup_gene_test_recommendations(gene_symbols: list[str]) -> list[dict[str, Any]]:
+def lookup_gene_test_recommendations(
+	gene_symbols: list[str],
+	generic_names: list[str] | None = None,
+) -> list[dict[str, Any]]:
 	cleaned_symbols = _clean_strings(gene_symbols)
 	if not cleaned_symbols:
 		return []
 
-	query = text(
-		"""
-		WITH ranked_pairs AS (
+	cleaned_generics = _clean_strings(generic_names or [])
+
+	# When we know which drugs were prescribed, filter gene_drug_pair rows to only
+	# those whose drug_name matches a prescribed generic — this prevents a gene shared
+	# by many drugs (e.g. CYP2D6) from returning an arbitrary unrelated drug's row.
+	if cleaned_generics:
+		query = text(
+			"""
+			SELECT DISTINCT ON (lower(btrim(gene_symbol)), lower(btrim(drug_name)))
+				gene_symbol,
+				drug_name,
+				guideline_name,
+				guideline_url,
+				cpic_level,
+				clinpgx_level,
+				provisional
+			FROM knowledge.gene_drug_pair
+			WHERE gene_symbol = ANY(CAST(:gene_symbols AS text[]))
+			  AND lower(btrim(drug_name)) = ANY(
+			        SELECT lower(btrim(unnest(CAST(:generic_names AS text[]))))
+			      )
+			ORDER BY
+				lower(btrim(gene_symbol)),
+				lower(btrim(drug_name)),
+				CASE
+					WHEN guideline_name IS NOT NULL AND btrim(guideline_name) <> '' THEN 0
+					ELSE 1
+				END,
+				lower(btrim(COALESCE(guideline_name, drug_name)))
+			"""
+		)
+		params: dict[str, Any] = {
+			"gene_symbols": cleaned_symbols,
+			"generic_names": cleaned_generics,
+		}
+	else:
+		query = text(
+			"""
 			SELECT DISTINCT ON (lower(btrim(gene_symbol)))
 				gene_symbol,
 				drug_name,
@@ -221,23 +259,13 @@ def lookup_gene_test_recommendations(gene_symbols: list[str]) -> list[dict[str, 
 					ELSE 1
 				END,
 				lower(btrim(COALESCE(guideline_name, drug_name)))
+			"""
 		)
-		SELECT
-			gene_symbol,
-			drug_name,
-			guideline_name,
-			guideline_url,
-			cpic_level,
-			clinpgx_level,
-			provisional
-		FROM ranked_pairs
-		ORDER BY lower(btrim(gene_symbol))
-		"""
-	)
+		params = {"gene_symbols": cleaned_symbols}
 
 	try:
 		with engine.connect() as connection:
-			rows = connection.execute(query, {"gene_symbols": cleaned_symbols}).mappings().all()
+			rows = connection.execute(query, params).mappings().all()
 	except SQLAlchemyError:
 		return []
 
@@ -297,29 +325,16 @@ def lookup_catalog(query: str | None = None) -> list[dict[str, Any]]:
 def _load_catalog() -> tuple[dict[str, Any], ...]:
 	sql = text(
 		"""
-		WITH catalog AS (
-			SELECT DISTINCT
-				md5(lower(btrim(dbg.brand_name)) || '|' || lower(btrim(dbg.generic_name))) AS drug_id,
-				dbg.brand_name AS drug_name,
-				dbg.brand_name AS brand_name,
-				dbg.generic_name AS generic_name,
-				ARRAY[dbg.generic_name]::text[] AS generics,
-				CAST(NULL AS text) AS strength,
-				'knowledge.drug_brand_generic' AS source_name
-			FROM knowledge.drug_brand_generic dbg
-			WHERE dbg.brand_name IS NOT NULL
-				AND dbg.generic_name IS NOT NULL
-		)
 		SELECT
-			drug_id,
-			drug_name,
-			brand_name,
-			generic_name,
-			generics,
-			strength,
-			source_name
-		FROM catalog
-		ORDER BY lower(drug_name), lower(generic_name)
+			md5(lower(btrim(brand_name))) AS drug_id,
+			brand_name AS drug_name,
+			brand_name AS brand_name,
+			array_agg(generic_name ORDER BY generic_name) AS generics
+		FROM knowledge.drug_brand_generic
+		WHERE brand_name IS NOT NULL
+		  AND generic_name IS NOT NULL
+		GROUP BY brand_name
+		ORDER BY lower(brand_name)
 		"""
 	)
 
@@ -334,10 +349,10 @@ def _load_catalog() -> tuple[dict[str, Any], ...]:
 			"drugId": row["drug_id"],
 			"drugName": row["drug_name"],
 			"brandName": row["brand_name"],
-			"genericName": row["generic_name"],
+			"genericName": row["generics"][0] if row["generics"] else None,
 			"generics": row["generics"] or [],
-			"strength": row["strength"],
-			"sourceName": row["source_name"],
+			"strength": None,
+			"sourceName": "knowledge.drug_brand_generic",
 		}
 		for row in rows
 	)
@@ -351,7 +366,10 @@ def build_prescription_response(payload: PrescriptionCreateRequest) -> dict[str,
 		for drug in payload.prescribed_drugs
 	]
 	gene_symbols = _collect_gene_symbols(resolved_drugs)
-	suggested_tests = lookup_gene_test_recommendations(gene_symbols)
+	generic_names = _clean_strings(
+		row["generic_name"] for row in lookup_rows if row.get("generic_name")
+	)
+	suggested_tests = lookup_gene_test_recommendations(gene_symbols, generic_names)
 
 	return {
 		"id": payload.prescription_id,
