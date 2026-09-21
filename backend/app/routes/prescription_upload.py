@@ -5,9 +5,10 @@ import os
 import traceback
 from typing import Any
 
+from google import genai
+from google.genai import types as genai_types
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import JSONResponse
-from openai import OpenAI, OpenAIError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -23,44 +24,35 @@ _ALLOWED_CONTENT_TYPES = {
     "image/webp",
 }
 _MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
-_VISION_MODEL = "gpt-4o"
+_VISION_MODEL = "gemini-3.6-flash"
+
+
+class OCRError(Exception):
+    pass
 
 
 def _extract_lines(file_bytes: bytes, content_type: str) -> list[dict[str, Any]]:
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY is not configured.")
+        raise ValueError("GEMINI_API_KEY is not configured.")
 
-    client = OpenAI(api_key=api_key)
-    b64_image = base64.standard_b64encode(file_bytes).decode()
+    client = genai.Client(api_key=api_key)
 
-    response = client.chat.completions.create(
-        model=_VISION_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{content_type};base64,{b64_image}"},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            "You are an OCR assistant. Extract every line of text visible "
-                            "in this prescription image. Return ONLY the raw extracted text, "
-                            "one line per line, exactly as it appears. Do not add explanations, "
-                            "headings, or any text that is not in the image."
-                        ),
-                    },
-                ],
-            }
-        ],
-        temperature=0,
-        max_tokens=2048,
-    )
+    try:
+        response = client.models.generate_content(
+            model=_VISION_MODEL,
+            contents=[
+                "You are an OCR assistant. Extract every line of text visible "
+                "in this prescription image. Return ONLY the raw extracted text, "
+                "one line per line, exactly as it appears. Do not add explanations, "
+                "headings, or any text that is not in the image.",
+                genai_types.Part.from_bytes(data=file_bytes, mime_type=content_type),
+            ],
+        )
+    except Exception as exc:  # google-genai raises its own error types
+        raise OCRError(str(exc)) from exc
 
-    raw_text = response.choices[0].message.content or ""
+    raw_text = response.text or ""
     return [
         {"text": line.strip(), "confidence": 1.0}
         for line in raw_text.splitlines()
@@ -151,9 +143,9 @@ async def upload_extract(file: UploadFile) -> Any:
 
         try:
             lines = _extract_lines(file_bytes, file.content_type)
-        except OpenAIError as exc:
+        except OCRError as exc:
             return JSONResponse(status_code=422, content={
-                "detail": f"OpenAI OCR error: {exc}"
+                "detail": f"Gemini OCR error: {exc}"
             })
         except ValueError as exc:
             return JSONResponse(status_code=500, content={"detail": str(exc)})
