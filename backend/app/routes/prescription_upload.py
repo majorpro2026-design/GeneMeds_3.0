@@ -7,12 +7,15 @@ from typing import Any
 
 from google import genai
 from google.genai import types as genai_types
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Depends, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.auth.dependencies import get_current_hcp
+from app.auth.schemas import HCPResponse
 from app.database import engine
+
 
 
 router = APIRouter(prefix="/api")
@@ -124,7 +127,11 @@ def _match_drugs(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 @router.post("/prescriptions/upload-extract")
-async def upload_extract(file: UploadFile) -> Any:
+async def upload_extract(
+    file: UploadFile,
+    current_hcp: HCPResponse = Depends(get_current_hcp),
+) -> Any:
+
     try:
         if file.content_type not in _ALLOWED_CONTENT_TYPES:
             return JSONResponse(status_code=400, content={

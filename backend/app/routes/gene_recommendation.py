@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.auth.dependencies import get_current_hcp
+from app.auth.schemas import HCPResponse
 from app.services.recommendation_lookup import get_full_recommendation
 
 
@@ -29,7 +31,11 @@ class GeneRecommendationRequest(BaseModel):
 
 
 @router.post("/gene-recommendation")
-def gene_recommendation(payload: GeneRecommendationRequest) -> dict[str, Any]:
+def gene_recommendation(
+    payload: GeneRecommendationRequest,
+    current_hcp: HCPResponse = Depends(get_current_hcp),
+) -> dict[str, Any]:
+
     diplotypes = [
         {"geneSymbol": item.gene_symbol, "diplotypeName": item.diplotype_name}
         for item in payload.diplotypes
