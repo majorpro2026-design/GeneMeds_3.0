@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import base64
-import os
 import traceback
 from typing import Any
 
-from google import genai
-from google.genai import types as genai_types
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import engine
+from app.services.bedrock_client import BedrockError, invoke_vision_text
 
 
 router = APIRouter(prefix="/api")
@@ -24,35 +21,21 @@ _ALLOWED_CONTENT_TYPES = {
     "image/webp",
 }
 _MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
-_VISION_MODEL = "gemini-3.6-flash"
 
-
-class OCRError(Exception):
-    pass
+_OCR_PROMPT = (
+    "You are an OCR assistant. Extract every line of text visible "
+    "in this prescription image. Return ONLY the raw extracted text, "
+    "one line per line, exactly as it appears. Do not add explanations, "
+    "headings, or any text that is not in the image."
+)
 
 
 def _extract_lines(file_bytes: bytes, content_type: str) -> list[dict[str, Any]]:
-    api_key = os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY is not configured.")
-
-    client = genai.Client(api_key=api_key)
-
-    try:
-        response = client.models.generate_content(
-            model=_VISION_MODEL,
-            contents=[
-                "You are an OCR assistant. Extract every line of text visible "
-                "in this prescription image. Return ONLY the raw extracted text, "
-                "one line per line, exactly as it appears. Do not add explanations, "
-                "headings, or any text that is not in the image.",
-                genai_types.Part.from_bytes(data=file_bytes, mime_type=content_type),
-            ],
-        )
-    except Exception as exc:  # google-genai raises its own error types
-        raise OCRError(str(exc)) from exc
-
-    raw_text = response.text or ""
+    raw_text = invoke_vision_text(
+        image_bytes=file_bytes,
+        content_type=content_type,
+        prompt=_OCR_PROMPT,
+    )
     return [
         {"text": line.strip(), "confidence": 1.0}
         for line in raw_text.splitlines()
@@ -143,12 +126,10 @@ async def upload_extract(file: UploadFile) -> Any:
 
         try:
             lines = _extract_lines(file_bytes, file.content_type)
-        except OCRError as exc:
+        except BedrockError as exc:
             return JSONResponse(status_code=422, content={
-                "detail": f"Gemini OCR error: {exc}"
+                "detail": f"Bedrock OCR error: {exc}"
             })
-        except ValueError as exc:
-            return JSONResponse(status_code=500, content={"detail": str(exc)})
 
         if not lines:
             return JSONResponse(status_code=422, content={

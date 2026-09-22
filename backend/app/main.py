@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.drugs import router as drugs_router
+from app.routes.chat import router as chat_router
 from app.routes.drug_gene_lookup import router as drug_gene_lookup_router
 from app.routes.gene_recommendation import router as gene_recommendation_router
 from app.routes.prescription_upload import router as prescription_upload_router
@@ -35,12 +36,9 @@ app.include_router(drug_gene_lookup_router)
 app.include_router(gene_recommendation_router)
 app.include_router(prescription_upload_router)
 app.include_router(prescriptions_router)
+app.include_router(chat_router)
 
 
 @app.get("/health")
 def health_check() -> dict[str, str]:
 	return {"status": "ok"}
-
-
-
-

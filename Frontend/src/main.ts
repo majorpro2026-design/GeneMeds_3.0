@@ -1,5 +1,7 @@
 import './style.css'
 import './catalogue.css'
+import './chat.css'
+import { mountChatWidget } from './chat'
 
 type Drug = {
   id: string
@@ -1091,6 +1093,7 @@ app.addEventListener('click', event => {
 })
 
 void loadDrugs()
+mountChatWidget()
 
 // ── Response parser ────────────────────────────────────────────────────────────
 function extractSuggestedTests(value: unknown): SuggestedTest[] {
