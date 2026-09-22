@@ -86,6 +86,23 @@ const SUGGESTION_LIMIT = 6
 const CATALOG_LIMIT = 18
 
 // ── App state ──────────────────────────────────────────────────────────────────
+type HCPUser = {
+  id: number
+  fullName: string
+  registrationNumber: string
+  email: string
+  isActive: boolean
+  lastLoginAt: string | null
+}
+
+let authChecking = true
+let currentHCP: HCPUser | null = null
+let authMode: 'signin' | 'register' = 'signin'
+let authLoading = false
+let authError = ''
+let showPassword = false
+let showConfirmPassword = false
+
 let drugs: Drug[] = []
 let loadingDrugs = true
 let loadError = ''
@@ -114,6 +131,7 @@ let recommendationResults: RecommendationResult[] = []
 let saveState: Record<string, { loading: boolean; saved: boolean; error: string; savedIds: RecommendationResult['savedRecordIds'] | null }> = {}
 
 const app = document.querySelector<HTMLDivElement>('#app')!
+
 
 // ── Icons ──────────────────────────────────────────────────────────────────────
 const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' | 'refresh' | 'warning' | 'upload' | 'dna' | 'flask' | 'info') => {
@@ -177,16 +195,35 @@ function genesForDrug(drugName: string): string[] {
 
 // ── Main render ────────────────────────────────────────────────────────────────
 function render() {
+  if (authChecking) {
+    app.innerHTML = `
+      <div class="auth-wrapper">
+        <div class="auth-card" style="text-align: center; padding: 48px 32px;">
+          <div class="spinner" style="width:32px; height:32px; border-width:3px; border-color:#2463b7 transparent #2463b7 #2463b7; margin:0 auto 16px;"></div>
+          <p style="color:#55677e; font-weight:600; margin:0;">Verifying session...</p>
+        </div>
+      </div>
+    `
+    return
+  }
+
+  if (!currentHCP) {
+    app.innerHTML = renderAuthScreen()
+    return
+  }
+
   app.innerHTML = `
     <main class="${step === 3 ? 'main-wide' : ''}">
       <header>
         <a class="brand" href="#" aria-label="GeneMeds home">
           <span class="brand-mark">${geneLogo}</span>
-          <span>Gene<span>Meds</span></span>
+          <span>GeneMeds</span>
+          <span class="brand-subtitle">Clinical PGx</span>
         </a>
-        <div class="doctor">
-          <span class="avatar">DR</span>
-          <div><strong>Dr. Amelia Carter</strong><small>General Physician</small></div>
+        <div class="hcp-user-badge">
+          <strong>Dr. ${escapeHtml(currentHCP.fullName)}</strong>
+          <span class="hcp-reg">Reg: ${escapeHtml(currentHCP.registrationNumber)}</span>
+          <button type="button" class="btn-logout" data-action="logout-hcp">Logout</button>
         </div>
       </header>
 
@@ -211,6 +248,94 @@ function render() {
   syncUploadState()
   syncLabFileLabel()
 }
+
+function renderAuthScreen() {
+  return `
+    <div class="auth-wrapper">
+      <div class="auth-card">
+        <div class="auth-header">
+          <div class="auth-logo">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/>
+              <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>
+              <path d="M9 12H4.5s.5-3 2-4.5"/>
+              <path d="M15 15v4.5s3-.5 4.5-2"/>
+            </svg>
+          </div>
+          <h2>GeneMeds Clinical Portal</h2>
+          <p class="auth-subtitle">Healthcare Provider Authentication</p>
+        </div>
+
+        <div class="auth-tabs" role="tablist">
+          <button type="button" role="tab" class="auth-tab ${authMode === 'signin' ? 'active' : ''}" aria-selected="${authMode === 'signin'}" data-action="switch-auth-tab" data-mode="signin">Sign In</button>
+          <button type="button" role="tab" class="auth-tab ${authMode === 'register' ? 'active' : ''}" aria-selected="${authMode === 'register'}" data-action="switch-auth-tab" data-mode="register">Create HCP Account</button>
+        </div>
+
+        <div id="auth-error-container">
+          ${authError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(authError)}</div></div>` : ''}
+        </div>
+
+        <form id="hcp-signin-form" class="auth-form ${authMode === 'signin' ? '' : 'hidden-form'}">
+          <div class="form-group">
+            <label for="signin-email">Email Address</label>
+            <input type="email" id="signin-email" placeholder="doctor@hospital.org" required autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label for="signin-password">Password</label>
+            <div class="password-input-wrap">
+              <input type="password" id="signin-password" placeholder="••••••••" required autocomplete="current-password">
+              <button type="button" class="btn-toggle-pw" aria-label="Toggle password visibility" data-action="toggle-pw-visibility">Show</button>
+            </div>
+          </div>
+          <button type="submit" id="btn-signin-submit" class="primary btn-auth-submit" ${authLoading && authMode === 'signin' ? 'disabled' : ''} data-action="submit-signin">
+            ${authLoading && authMode === 'signin' ? '<span class="spinner"></span> Signing in...' : 'Sign In'}
+          </button>
+          <p class="auth-footer-text">
+            Don't have an account? <a href="#" data-action="switch-auth-tab" data-mode="register">Create HCP account</a>
+          </p>
+        </form>
+
+        <form id="hcp-register-form" class="auth-form ${authMode === 'register' ? '' : 'hidden-form'}">
+          <div class="form-group">
+            <label for="reg-fullname">Full Name</label>
+            <input type="text" id="reg-fullname" placeholder="Dr. Sarah Jenkins" required autocomplete="name">
+          </div>
+          <div class="form-group">
+            <label for="reg-number">Medical Registration Number</label>
+            <input type="text" id="reg-number" placeholder="REG-849204" required>
+          </div>
+          <div class="form-group">
+            <label for="reg-email">Email Address</label>
+            <input type="email" id="reg-email" placeholder="doctor@hospital.org" required autocomplete="email">
+          </div>
+          <div class="form-group">
+            <label for="reg-password">Password (min 8 characters)</label>
+            <div class="password-input-wrap">
+              <input type="password" id="reg-password" placeholder="••••••••" required minlength="8" autocomplete="new-password">
+              <button type="button" class="btn-toggle-pw" aria-label="Toggle password visibility" data-action="toggle-pw-visibility">Show</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="reg-confirm-password">Confirm Password</label>
+            <div class="password-input-wrap">
+              <input type="password" id="reg-confirm-password" placeholder="••••••••" required minlength="8" autocomplete="new-password">
+              <button type="button" class="btn-toggle-pw" aria-label="Toggle confirm password visibility" data-action="toggle-confirm-pw-visibility">Show</button>
+            </div>
+          </div>
+          <button type="submit" id="btn-register-submit" class="primary btn-auth-submit" ${authLoading && authMode === 'register' ? 'disabled' : ''} data-action="submit-register">
+            ${authLoading && authMode === 'register' ? '<span class="spinner"></span> Creating account...' : 'Create Account'}
+          </button>
+          <p class="auth-footer-text">
+            Already have an account? <a href="#" data-action="switch-auth-tab" data-mode="signin">Sign in</a>
+          </p>
+        </form>
+      </div>
+    </div>
+  `
+}
+
+
+
 
 function stepper() {
   const labels = ['Create prescription', 'Review drug info', 'Gene test results']
@@ -772,7 +897,10 @@ async function loadDrugs() {
 
 async function fetchDrugCatalog() {
   try {
-    const response = await fetch(DRUG_ENDPOINT, { headers: { Accept: 'application/json' } })
+    const response = await fetch(DRUG_ENDPOINT, {
+      headers: { Accept: 'application/json' },
+      credentials: 'include',
+    })
     if (!response.ok) throw new Error(`Drug catalog request failed with status ${response.status}`)
     const text = await response.text()
     if (!text.trim()) throw new Error('Drug catalog response was empty.')
@@ -811,8 +939,12 @@ async function submitPrescription() {
     const response = await fetch(PRESCRIPTION_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(payload),
     })
+    if (response.status === 401) {
+      currentHCP = null; render(); return
+    }
     if (!response.ok) throw new Error(`Prescription upload failed with status ${response.status}`)
     const body = (await response.json()) as { suggestedTests?: unknown }
     suggestedTests = extractSuggestedTests(body.suggestedTests)
@@ -835,8 +967,12 @@ async function extractLabReport() {
     const response = await fetch(UPLOAD_EXTRACT_ENDPOINT, {
       method: 'POST',
       headers: { Accept: 'application/json' },
+      credentials: 'include',
       body: formData,
     })
+    if (response.status === 401) {
+      currentHCP = null; render(); return
+    }
     if (!response.ok) {
       const err = (await response.json().catch(() => ({}))) as { detail?: string }
       throw new Error(err.detail ?? `Extraction failed with status ${response.status}`)
@@ -852,26 +988,16 @@ async function extractLabReport() {
   }
 }
 
-/**
- * Tries to match gene symbols from suggestedTests against extracted OCR lines.
- * Handles formats like:
- *   "CYP2D6 *4/*4"
- *   "CYP2D6: *4/*4"
- *   "Gene: CYP2D6  Diplotype: *4/*4"
- *   "CYP2D6" on one line, "*4/*4" on the next
- */
 function autoFillDiplotypeInputs(lines: string[]) {
   const genes = uniqueGenes()
-  // Matches diplotype patterns: *4/*4, *1/*2xN, *17/*17, etc.
   const diplotypeRe = /(\*\d+(?:[a-z]\d*)?(?:x\d+)?\/\*\d+(?:[a-z]\d*)?(?:x\d+)?)/i
 
   for (const gene of genes) {
-    if ((diplotypeInputs[gene] ?? '').trim()) continue // don't overwrite existing
+    if ((diplotypeInputs[gene] ?? '').trim()) continue
     const geneRe = new RegExp(`\\b${gene.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
 
     for (let i = 0; i < lines.length; i++) {
       if (!geneRe.test(lines[i])) continue
-      // Search this line and the next 3 joined together
       const window = lines.slice(i, i + 4).join(' ')
       const match = diplotypeRe.exec(window)
       if (match) {
@@ -885,9 +1011,6 @@ function autoFillDiplotypeInputs(lines: string[]) {
 async function getRecommendation() {
   if (recommendationLoading) return
 
-  // Sync any diplotype input values from the live DOM into state before render()
-  // destroys the elements. This ensures OCR-filled or programmatically set values
-  // that didn't go through the input event handler are captured.
   document.querySelectorAll<HTMLInputElement>('[data-action="diplotype-input"][data-gene]')
     .forEach(el => {
       const gene = el.dataset.gene
@@ -906,8 +1029,13 @@ async function getRecommendation() {
           const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ drugName, diplotypes }),
           })
+          if (response.status === 401) {
+            currentHCP = null; render()
+            return { drugName, found: false, reason: 'Authentication required.' } as RecommendationResult
+          }
           if (!response.ok) {
             const err = (await response.json().catch(() => ({}))) as { detail?: string }
             return { drugName, found: false, reason: err.detail ?? `Failed with status ${response.status}` } as RecommendationResult
@@ -941,8 +1069,12 @@ async function saveRecommendation(drugName: string) {
     const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ drugName, diplotypes, patientId: 1, enteredByDoctorId: 1, persist: true }),
     })
+    if (response.status === 401) {
+      currentHCP = null; render(); return
+    }
     if (!response.ok) {
       const err = (await response.json().catch(() => ({}))) as { detail?: string }
       throw new Error(err.detail ?? `Save failed with status ${response.status}`)
@@ -955,6 +1087,7 @@ async function saveRecommendation(drugName: string) {
     render()
   }
 }
+
 
 // ── Input field sync ───────────────────────────────────────────────────────────
 function syncDrugField(target: HTMLInputElement | HTMLSelectElement) {
@@ -1054,14 +1187,250 @@ app.addEventListener('pointerdown', event => {
   event.preventDefault(); addDrugToPrescription(id)
 })
 
+// ── Auth handlers ─────────────────────────────────────────────────────────────
+// ── Auth handlers ─────────────────────────────────────────────────────────────
+let sessionCheckDone = false
+
+async function checkAuthSession() {
+  if (sessionCheckDone) return
+  authChecking = true
+  render()
+  try {
+    const res = await fetch('/api/auth/hcp/me', { credentials: 'include' })
+    if (res.ok) {
+      const data = (await res.json()) as { hcp: HCPUser }
+      currentHCP = data.hcp
+      void loadDrugs()
+    } else {
+      currentHCP = null
+    }
+  } catch {
+    currentHCP = null
+  } finally {
+    authChecking = false
+    sessionCheckDone = true
+    render()
+  }
+}
+
+// ── Auth helpers & DOM updates ───────────────────────────────────────────────
+function updateAuthErrorBanner(msg: string) {
+  authError = msg
+  const container = document.querySelector('#auth-error-container')
+  if (container) {
+    container.innerHTML = msg ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(msg)}</div></div>` : ''
+  }
+}
+
+function updateSubmitBtn(btnId: string, isLoading: boolean, loadingText: string, normalText: string) {
+  authLoading = isLoading
+  const btn = document.querySelector<HTMLButtonElement>(`#${btnId}`)
+  if (btn) {
+    btn.disabled = isLoading
+    btn.innerHTML = isLoading ? `<span class="spinner"></span> ${loadingText}` : normalText
+  }
+}
+
+async function submitSignIn() {
+  try {
+    const emailEl = document.querySelector<HTMLInputElement>('#signin-email')
+    const passwordEl = document.querySelector<HTMLInputElement>('#signin-password')
+    const email = (emailEl?.value ?? '').trim()
+    const password = passwordEl?.value ?? ''
+
+    if (!email || !password) {
+      updateAuthErrorBanner('Please enter both email and password.')
+      return
+    }
+
+    updateAuthErrorBanner('')
+    updateSubmitBtn('btn-signin-submit', true, 'Signing in...', 'Sign In')
+
+    const res = await fetch('/api/auth/hcp/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email, password }),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { detail?: string }
+      throw new Error(err.detail ?? 'Invalid email or password.')
+    }
+    const data = (await res.json()) as { hcp: HCPUser }
+    currentHCP = data.hcp
+    updateAuthErrorBanner('')
+    render()
+    void loadDrugs()
+  } catch (err) {
+    updateAuthErrorBanner(err instanceof Error ? err.message : 'Login failed.')
+    updateSubmitBtn('btn-signin-submit', false, 'Signing in...', 'Sign In')
+  }
+}
+
+async function submitRegister() {
+  try {
+    const fullNameEl = document.querySelector<HTMLInputElement>('#reg-fullname')
+    const regNumberEl = document.querySelector<HTMLInputElement>('#reg-number')
+    const emailEl = document.querySelector<HTMLInputElement>('#reg-email')
+    const passwordEl = document.querySelector<HTMLInputElement>('#reg-password')
+    const confirmPasswordEl = document.querySelector<HTMLInputElement>('#reg-confirm-password')
+
+    const fullName = (fullNameEl?.value ?? '').trim()
+    const registrationNumber = (regNumberEl?.value ?? '').trim()
+    const email = (emailEl?.value ?? '').trim()
+    const password = passwordEl?.value ?? ''
+    const confirmPassword = confirmPasswordEl?.value ?? ''
+
+    if (!fullName || !registrationNumber || !email || !password || !confirmPassword) {
+      updateAuthErrorBanner('Please fill in all registration fields.')
+      return
+    }
+
+    if (password.length < 8) {
+      updateAuthErrorBanner('Password must be at least 8 characters long.')
+      return
+    }
+
+    if (password !== confirmPassword) {
+      updateAuthErrorBanner('Passwords do not match.')
+      return
+    }
+
+    updateAuthErrorBanner('')
+    updateSubmitBtn('btn-register-submit', true, 'Creating account...', 'Create Account')
+
+    const res = await fetch('/api/auth/hcp/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        fullName,
+        registrationNumber,
+        email,
+        password,
+        confirmPassword,
+      }),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { detail?: string }
+      throw new Error(err.detail ?? 'Registration failed.')
+    }
+    const data = (await res.json()) as { hcp: HCPUser }
+    currentHCP = data.hcp
+    updateAuthErrorBanner('')
+    render()
+    void loadDrugs()
+  } catch (err) {
+    updateAuthErrorBanner(err instanceof Error ? err.message : 'Registration failed.')
+    updateSubmitBtn('btn-register-submit', false, 'Creating account...', 'Create Account')
+  }
+}
+
+async function handleLogout() {
+  try {
+    await fetch('/api/auth/hcp/logout', {
+      method: 'POST',
+      credentials: 'include',
+    })
+  } catch {
+    // Ignore
+  } finally {
+    currentHCP = null
+    step = 1
+    items = []
+    render()
+  }
+}
+
+app.addEventListener('submit', event => {
+  event.preventDefault()
+  const target = event.target as HTMLElement | null
+  const formId = target?.id
+  if (formId === 'hcp-signin-form') {
+    void submitSignIn()
+  } else if (formId === 'hcp-register-form') {
+    void submitRegister()
+  }
+})
+
 app.addEventListener('click', event => {
   const target = event.target as HTMLElement | null
   const actionEl = target?.closest<HTMLElement>('[data-action]')
   const action = actionEl?.dataset.action
-  // Resolve id only from the action element itself, not by walking up the whole tree.
-  // Walking up with closest('[data-id]') would accidentally match data-id on drug form
-  // inputs/selects that are already in the prescription list.
   const id = actionEl?.dataset.id ?? actionEl?.closest<HTMLElement>('[data-id]')?.dataset.id
+
+  if (action === 'switch-auth-tab') {
+    event.preventDefault()
+    const mode = actionEl?.dataset.mode as 'signin' | 'register'
+    if (mode) {
+      authMode = mode
+      updateAuthErrorBanner('')
+
+      const tabs = document.querySelectorAll('.auth-tab')
+      tabs.forEach(t => {
+        const isSelected = (t as HTMLElement).dataset.mode === mode
+        t.classList.toggle('active', isSelected)
+        t.setAttribute('aria-selected', isSelected ? 'true' : 'false')
+      })
+
+      const signinForm = document.querySelector('#hcp-signin-form')
+      const registerForm = document.querySelector('#hcp-register-form')
+      if (signinForm && registerForm) {
+        if (mode === 'signin') {
+          signinForm.classList.remove('hidden-form')
+          registerForm.classList.add('hidden-form')
+        } else {
+          registerForm.classList.remove('hidden-form')
+          signinForm.classList.add('hidden-form')
+        }
+      }
+    }
+    return
+  }
+
+  if (action === 'toggle-pw-visibility') {
+    event.preventDefault()
+    const wrap = actionEl?.closest('.password-input-wrap')
+    const input = wrap?.querySelector<HTMLInputElement>('input')
+    if (input) {
+      const isPw = input.type === 'password'
+      input.type = isPw ? 'text' : 'password'
+      if (actionEl) actionEl.textContent = isPw ? 'Hide' : 'Show'
+      input.focus()
+    }
+    return
+  }
+
+  if (action === 'toggle-confirm-pw-visibility') {
+    event.preventDefault()
+    const wrap = actionEl?.closest('.password-input-wrap')
+    const input = wrap?.querySelector<HTMLInputElement>('input')
+    if (input) {
+      const isPw = input.type === 'password'
+      input.type = isPw ? 'text' : 'password'
+      if (actionEl) actionEl.textContent = isPw ? 'Hide' : 'Show'
+      input.focus()
+    }
+    return
+  }
+
+  if (action === 'submit-signin') {
+    event.preventDefault()
+    void submitSignIn()
+    return
+  }
+
+  if (action === 'submit-register') {
+    event.preventDefault()
+    void submitRegister()
+    return
+  }
+
+  if (action === 'logout-hcp') {
+    event.preventDefault()
+    void handleLogout()
+    return
+  }
 
   if (action === 'add-drug' && id) { addDrugToPrescription(id); return }
   if (action === 'remove-drug' && id) { items = items.filter(i => i.id !== id); render(); return }
@@ -1090,7 +1459,10 @@ app.addEventListener('click', event => {
   }
 })
 
-void loadDrugs()
+
+void checkAuthSession()
+
+
 
 // ── Response parser ────────────────────────────────────────────────────────────
 function extractSuggestedTests(value: unknown): SuggestedTest[] {
