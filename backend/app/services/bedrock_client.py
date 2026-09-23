@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import json
 import os
 from typing import Any
 
@@ -16,19 +14,24 @@ class BedrockError(RuntimeError):
 
 _DEFAULT_REGION = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
 
-# Anthropic Claude on Bedrock is used for both OCR (multimodal) and chat, since it
-# accepts the same Messages-API request shape for text-only and image+text calls.
-# Override via env if your account uses different model IDs / regions / inference profiles.
-OCR_MODEL_ID = os.getenv("BEDROCK_OCR_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0")
-CHAT_MODEL_ID = os.getenv("BEDROCK_CHAT_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0")
+# Amazon Nova is used here instead of Anthropic's Claude models. Anthropic models on
+# Bedrock are billed through an AWS Marketplace "consumption pricing" contract, which
+# AISPL (India) accounts cannot pay for with a card/UPI as the default payment method
+# — only via invoicing terms. Nova is a first-party Amazon model billed directly like
+# any other AWS service, so it isn't subject to that restriction.
+#
+# We use the Bedrock Converse API (client.converse) rather than the raw invoke_model
+# request shape, since Converse is a single, model-agnostic interface that works the
+# same way across Nova, Claude, and other Bedrock models — so swapping models again in
+# future (env var only) won't require touching this request-building code.
+OCR_MODEL_ID = os.getenv("BEDROCK_OCR_MODEL_ID", "amazon.nova-lite-v1:0")
+CHAT_MODEL_ID = os.getenv("BEDROCK_CHAT_MODEL_ID", "amazon.nova-lite-v1:0")
 
-_ANTHROPIC_VERSION = "bedrock-2023-05-31"
-
-_MEDIA_TYPES = {
-    "image/jpeg": "image/jpeg",
-    "image/png": "image/png",
-    "image/webp": "image/webp",
-    "image/tiff": "image/tiff",
+_SUPPORTED_IMAGE_FORMATS = {
+    "image/jpeg": "jpeg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/tiff": "jpeg",  # Converse API has no tiff support; best-effort fallback.
 }
 
 _client = None
@@ -50,36 +53,17 @@ def _get_client():
     return _client
 
 
-def _media_type_for(content_type: str) -> str:
-    return _MEDIA_TYPES.get(content_type, "image/jpeg")
+def _image_format_for(content_type: str) -> str:
+    return _SUPPORTED_IMAGE_FORMATS.get(content_type, "jpeg")
 
 
-def _extract_text(payload: dict[str, Any]) -> str:
-    blocks = payload.get("content", [])
-    parts = [
-        block.get("text", "")
-        for block in blocks
-        if isinstance(block, dict) and block.get("type") == "text"
-    ]
+def _extract_text(response: dict[str, Any]) -> str:
+    try:
+        blocks = response["output"]["message"]["content"]
+    except (KeyError, TypeError):
+        return ""
+    parts = [b.get("text", "") for b in blocks if isinstance(b, dict) and "text" in b]
     return "\n".join(part for part in parts if part).strip()
-
-
-def _invoke(model_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    client = _get_client()
-    try:
-        response = client.invoke_model(
-            modelId=model_id,
-            body=json.dumps(body),
-            contentType="application/json",
-            accept="application/json",
-        )
-    except (BotoCoreError, ClientError) as exc:
-        raise BedrockError(f"Bedrock invocation failed: {exc}") from exc
-
-    try:
-        return json.loads(response["body"].read())
-    except (json.JSONDecodeError, KeyError) as exc:
-        raise BedrockError(f"Bedrock returned an unparseable response: {exc}") from exc
 
 
 def invoke_vision_text(
@@ -92,32 +76,31 @@ def invoke_vision_text(
     temperature: float = 0.0,
 ) -> str:
     """Send a single image + text prompt to a Bedrock multimodal model, return the text reply."""
-    b64_image = base64.standard_b64encode(image_bytes).decode()
+    client = _get_client()
 
-    body = {
-        "anthropic_version": _ANTHROPIC_VERSION,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": _media_type_for(content_type),
-                            "data": b64_image,
+    try:
+        response = client.converse(
+            modelId=model_id or OCR_MODEL_ID,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "image": {
+                                "format": _image_format_for(content_type),
+                                "source": {"bytes": image_bytes},
+                            }
                         },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }
-        ],
-    }
+                        {"text": prompt},
+                    ],
+                }
+            ],
+            inferenceConfig={"maxTokens": max_tokens, "temperature": temperature},
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise BedrockError(f"Bedrock invocation failed: {exc}") from exc
 
-    payload = _invoke(model_id or OCR_MODEL_ID, body)
-    text = _extract_text(payload)
+    text = _extract_text(response)
     if not text:
         raise BedrockError("Bedrock returned no text content for the OCR request.")
     return text
@@ -132,17 +115,22 @@ def invoke_chat(
     temperature: float = 0.4,
 ) -> str:
     """Send a text-only conversation to Bedrock and return the assistant's reply."""
-    body: dict[str, Any] = {
-        "anthropic_version": _ANTHROPIC_VERSION,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
+    client = _get_client()
+
+    kwargs: dict[str, Any] = {
+        "modelId": model_id or CHAT_MODEL_ID,
         "messages": [
-            {"role": m["role"], "content": [{"type": "text", "text": m["content"]}]}
+            {"role": m["role"], "content": [{"text": m["content"]}]}
             for m in messages
         ],
+        "inferenceConfig": {"maxTokens": max_tokens, "temperature": temperature},
     }
     if system:
-        body["system"] = system
+        kwargs["system"] = [{"text": system}]
 
-    payload = _invoke(model_id or CHAT_MODEL_ID, body)
-    return _extract_text(payload)
+    try:
+        response = client.converse(**kwargs)
+    except (BotoCoreError, ClientError) as exc:
+        raise BedrockError(f"Bedrock invocation failed: {exc}") from exc
+
+    return _extract_text(response)
