@@ -79,6 +79,15 @@ type RecommendationResult = {
   savedRecordIds?: { resultIds: number[]; assessmentId: number | null }
 }
 
+type HCPUser = {
+  id: number
+  fullName: string
+  registrationNumber: string
+  email: string
+  isActive: boolean
+  lastLoginAt: string | null
+}
+
 const DRUG_ENDPOINT = import.meta.env.VITE_DRUGS_API_URL ?? '/api/drugs'
 const PRESCRIPTION_ENDPOINT = import.meta.env.VITE_PRESCRIPTION_API_URL ?? '/api/prescriptions'
 const UPLOAD_EXTRACT_ENDPOINT = '/api/prescriptions/upload-extract'
@@ -88,6 +97,12 @@ const SUGGESTION_LIMIT = 6
 const CATALOG_LIMIT = 18
 
 // ── App state ──────────────────────────────────────────────────────────────────
+let authChecking = true
+let currentHCP: HCPUser | null = null
+let authMode: 'signin' | 'register' = 'signin'
+let authLoading = false
+let authError = ''
+
 let drugs: Drug[] = []
 let loadingDrugs = true
 let loadError = ''
@@ -177,8 +192,300 @@ function genesForDrug(drugName: string): string[] {
   return out
 }
 
+// ── Auth handlers & session ───────────────────────────────────────────────────
+let sessionCheckDone = false
+
+async function checkAuthSession() {
+  if (sessionCheckDone) return
+  authChecking = true
+  render()
+  try {
+    const res = await fetch('/api/auth/hcp/me', { credentials: 'include' })
+    if (res.ok) {
+      const data = (await res.json()) as { hcp: HCPUser }
+      currentHCP = data.hcp
+      void loadDrugs()
+    } else {
+      currentHCP = null
+    }
+  } catch {
+    currentHCP = null
+  } finally {
+    authChecking = false
+    sessionCheckDone = true
+    render()
+  }
+}
+
+function updateAuthErrorBanner(msg: string) {
+  authError = msg
+  const container = document.querySelector('#auth-error-container')
+  if (container) {
+    container.innerHTML = msg ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(msg)}</div></div>` : ''
+  }
+}
+
+function updateSubmitBtn(btnId: string, isLoading: boolean, loadingText: string, normalText: string) {
+  authLoading = isLoading
+  const btn = document.querySelector<HTMLButtonElement>(`#${btnId}`)
+  if (btn) {
+    btn.disabled = isLoading
+    btn.innerHTML = isLoading ? `<span class="spinner"></span> ${loadingText}` : normalText
+  }
+}
+
+async function submitSignIn() {
+  try {
+    const emailEl = document.querySelector<HTMLInputElement>('#signin-email')
+    const passwordEl = document.querySelector<HTMLInputElement>('#signin-password')
+    const email = (emailEl?.value ?? '').trim()
+    const password = passwordEl?.value ?? ''
+
+    if (!email || !password) {
+      updateAuthErrorBanner('Please enter both email and password.')
+      return
+    }
+
+    updateAuthErrorBanner('')
+    updateSubmitBtn('btn-signin-submit', true, 'Signing in...', 'Sign In')
+
+    const res = await fetch('/api/auth/hcp/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ email, password }),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { detail?: string }
+      throw new Error(err.detail ?? 'Invalid email or password.')
+    }
+    const data = (await res.json()) as { hcp: HCPUser }
+    currentHCP = data.hcp
+    updateAuthErrorBanner('')
+    render()
+    void loadDrugs()
+  } catch (err) {
+    updateAuthErrorBanner(err instanceof Error ? err.message : 'Login failed.')
+    updateSubmitBtn('btn-signin-submit', false, 'Signing in...', 'Sign In')
+  }
+}
+
+async function submitRegister() {
+  try {
+    const fullNameEl = document.querySelector<HTMLInputElement>('#reg-fullname')
+    const regNumberEl = document.querySelector<HTMLInputElement>('#reg-number')
+    const emailEl = document.querySelector<HTMLInputElement>('#reg-email')
+    const passwordEl = document.querySelector<HTMLInputElement>('#reg-password')
+    const confirmPasswordEl = document.querySelector<HTMLInputElement>('#reg-confirm-password')
+
+    const fullName = (fullNameEl?.value ?? '').trim()
+    const registrationNumber = (regNumberEl?.value ?? '').trim()
+    const email = (emailEl?.value ?? '').trim()
+    const password = passwordEl?.value ?? ''
+    const confirmPassword = confirmPasswordEl?.value ?? ''
+
+    if (!fullName || !registrationNumber || !email || !password || !confirmPassword) {
+      updateAuthErrorBanner('Please fill in all registration fields.')
+      return
+    }
+
+    if (password.length < 8) {
+      updateAuthErrorBanner('Password must be at least 8 characters long.')
+      return
+    }
+
+    if (password !== confirmPassword) {
+      updateAuthErrorBanner('Passwords do not match.')
+      return
+    }
+
+    updateAuthErrorBanner('')
+    updateSubmitBtn('btn-register-submit', true, 'Creating account...', 'Create Account')
+
+    const res = await fetch('/api/auth/hcp/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        fullName,
+        registrationNumber,
+        email,
+        password,
+        confirmPassword,
+      }),
+    })
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { detail?: string }
+      throw new Error(err.detail ?? 'Registration failed.')
+    }
+    const data = (await res.json()) as { hcp: HCPUser }
+    currentHCP = data.hcp
+    updateAuthErrorBanner('')
+    render()
+    void loadDrugs()
+  } catch (err) {
+    updateAuthErrorBanner(err instanceof Error ? err.message : 'Registration failed.')
+    updateSubmitBtn('btn-register-submit', false, 'Creating account...', 'Create Account')
+  }
+}
+
+async function logoutHCP() {
+  try {
+    await fetch('/api/auth/hcp/logout', { method: 'POST', credentials: 'include' })
+  } catch {
+    // Ignore error
+  } finally {
+    currentHCP = null
+    authError = ''
+    sessionCheckDone = false
+    render()
+  }
+}
+
+function renderSignInForm() {
+  return `
+    <form class="auth-form" onsubmit="return false">
+      <div class="auth-form-group">
+        <label for="signin-email">Email Address <b>*</b></label>
+        <div class="auth-input-wrap">
+          <input type="email" id="signin-email" class="auth-input" placeholder="doctor@example.com" autocomplete="email" required>
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label for="signin-password">Password <b>*</b></label>
+        <div class="auth-input-wrap">
+          <input type="password" id="signin-password" class="auth-input" placeholder="••••••••" autocomplete="current-password" required>
+          <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="signin-password" title="Toggle password visibility">
+            ${icon('info')}
+          </button>
+        </div>
+      </div>
+
+      <button type="submit" class="primary auth-submit-btn" id="btn-signin-submit" data-action="submit-signin" ${authLoading ? 'disabled' : ''}>
+        ${authLoading ? '<span class="spinner"></span> Signing in...' : 'Sign In'}
+      </button>
+    </form>
+  `
+}
+
+function renderRegisterForm() {
+  return `
+    <form class="auth-form" onsubmit="return false">
+      <div class="auth-form-group">
+        <label for="reg-fullname">Full Name <b>*</b></label>
+        <div class="auth-input-wrap">
+          <input type="text" id="reg-fullname" class="auth-input" placeholder="Dr. Jane Doe" autocomplete="name" required>
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label for="reg-number">Medical Registration Number <b>*</b></label>
+        <div class="auth-input-wrap">
+          <input type="text" id="reg-number" class="auth-input" placeholder="e.g. MCI-123456" autocomplete="off" required>
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label for="reg-email">Email Address <b>*</b></label>
+        <div class="auth-input-wrap">
+          <input type="email" id="reg-email" class="auth-input" placeholder="doctor@example.com" autocomplete="email" required>
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label for="reg-password">Password (min 8 characters) <b>*</b></label>
+        <div class="auth-input-wrap">
+          <input type="password" id="reg-password" class="auth-input" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
+          <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="reg-password" title="Toggle password visibility">
+            ${icon('info')}
+          </button>
+        </div>
+      </div>
+
+      <div class="auth-form-group">
+        <label for="reg-confirm-password">Confirm Password <b>*</b></label>
+        <div class="auth-input-wrap">
+          <input type="password" id="reg-confirm-password" class="auth-input" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
+          <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="reg-confirm-password" title="Toggle password visibility">
+            ${icon('info')}
+          </button>
+        </div>
+      </div>
+
+      <button type="submit" class="primary auth-submit-btn" id="btn-register-submit" data-action="submit-register" ${authLoading ? 'disabled' : ''}>
+        ${authLoading ? '<span class="spinner"></span> Creating account...' : 'Create Account'}
+      </button>
+    </form>
+  `
+}
+
 // ── Main render ────────────────────────────────────────────────────────────────
 function render() {
+  if (authChecking) {
+    app.innerHTML = `
+      <main>
+        <header>
+          <a class="brand" href="#" aria-label="GeneMeds home">
+            <span class="brand-mark">${geneLogo}</span>
+            <span>Gene<span>Meds</span></span>
+          </a>
+        </header>
+        <div class="auth-loading-splash">
+          <span class="spinner"></span>
+          <span>Verifying authorization...</span>
+        </div>
+      </main>
+    `
+    return
+  }
+
+  if (!currentHCP) {
+    app.innerHTML = `
+      <main>
+        <header>
+          <a class="brand" href="#" aria-label="GeneMeds home">
+            <span class="brand-mark">${geneLogo}</span>
+            <span>Gene<span>Meds</span></span>
+          </a>
+        </header>
+
+        <div class="auth-wrapper">
+          <div class="auth-card">
+            <div class="auth-header">
+              <span class="brand-mark">${geneLogo}</span>
+              <h1>Healthcare Professional Portal</h1>
+              <p>Sign in to your account or register to access clinical pharmacogenomic guidance.</p>
+            </div>
+
+            <div class="auth-tabs" role="tablist">
+              <button class="auth-tab ${authMode === 'signin' ? 'active' : ''}" data-action="set-auth-mode" data-mode="signin" role="tab">Sign In</button>
+              <button class="auth-tab ${authMode === 'register' ? 'active' : ''}" data-action="set-auth-mode" data-mode="register" role="tab">Register</button>
+            </div>
+
+            <div id="auth-error-container">
+              ${authError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(authError)}</div></div>` : ''}
+            </div>
+
+            ${authMode === 'signin' ? renderSignInForm() : renderRegisterForm()}
+          </div>
+        </div>
+      </main>
+    `
+    syncSearchSuggestions()
+    syncUploadState()
+    syncLabFileLabel()
+    return
+  }
+
+  const initials = currentHCP.fullName
+    .split(' ')
+    .map(n => n[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase() || 'DR'
+
   app.innerHTML = `
     <main class="${step === 3 ? 'main-wide' : ''}">
       <header>
@@ -187,8 +494,12 @@ function render() {
           <span>Gene<span>Meds</span></span>
         </a>
         <div class="doctor">
-          <span class="avatar">DR</span>
-          <div><strong>Dr. Amelia Carter</strong><small>General Physician</small></div>
+          <span class="avatar">${escapeHtml(initials)}</span>
+          <div>
+            <strong>${escapeHtml(currentHCP.fullName)}</strong>
+            <small>Reg: ${escapeHtml(currentHCP.registrationNumber)}</small>
+          </div>
+          <button class="doctor-logout-btn" data-action="logout">Sign Out</button>
         </div>
       </header>
 
@@ -813,8 +1124,14 @@ async function submitPrescription() {
     const response = await fetch(PRESCRIPTION_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
       body: JSON.stringify(payload),
     })
+    if (response.status === 401) {
+      currentHCP = null
+      authError = 'Session expired. Please sign in again.'
+      return
+    }
     if (!response.ok) throw new Error(`Prescription upload failed with status ${response.status}`)
     const body = (await response.json()) as { suggestedTests?: unknown }
     suggestedTests = extractSuggestedTests(body.suggestedTests)
@@ -837,8 +1154,14 @@ async function extractLabReport() {
     const response = await fetch(UPLOAD_EXTRACT_ENDPOINT, {
       method: 'POST',
       headers: { Accept: 'application/json' },
+      credentials: 'include',
       body: formData,
     })
+    if (response.status === 401) {
+      currentHCP = null
+      authError = 'Session expired. Please sign in again.'
+      return
+    }
     if (!response.ok) {
       const err = (await response.json().catch(() => ({}))) as { detail?: string }
       throw new Error(err.detail ?? `Extraction failed with status ${response.status}`)
@@ -908,8 +1231,15 @@ async function getRecommendation() {
           const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ drugName, diplotypes }),
           })
+          if (response.status === 401) {
+            currentHCP = null
+            authError = 'Session expired. Please sign in again.'
+            render()
+            return { drugName, found: false, reason: 'Session expired.' } as RecommendationResult
+          }
           if (!response.ok) {
             const err = (await response.json().catch(() => ({}))) as { detail?: string }
             return { drugName, found: false, reason: err.detail ?? `Failed with status ${response.status}` } as RecommendationResult
@@ -943,8 +1273,15 @@ async function saveRecommendation(drugName: string) {
     const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
       body: JSON.stringify({ drugName, diplotypes, patientId: 1, enteredByDoctorId: 1, persist: true }),
     })
+    if (response.status === 401) {
+      currentHCP = null
+      authError = 'Session expired. Please sign in again.'
+      render()
+      return
+    }
     if (!response.ok) {
       const err = (await response.json().catch(() => ({}))) as { detail?: string }
       throw new Error(err.detail ?? `Save failed with status ${response.status}`)
@@ -1065,6 +1402,31 @@ app.addEventListener('click', event => {
   // inputs/selects that are already in the prescription list.
   const id = actionEl?.dataset.id ?? actionEl?.closest<HTMLElement>('[data-id]')?.dataset.id
 
+  if (action === 'set-auth-mode') {
+    const mode = actionEl?.dataset.mode as 'signin' | 'register' | undefined
+    if (mode && mode !== authMode) {
+      authMode = mode
+      authError = ''
+      render()
+    }
+    return
+  }
+
+  if (action === 'toggle-pw') {
+    const targetId = actionEl?.dataset.target
+    if (targetId) {
+      const input = document.querySelector<HTMLInputElement>(`#${targetId}`)
+      if (input) {
+        input.type = input.type === 'password' ? 'text' : 'password'
+      }
+    }
+    return
+  }
+
+  if (action === 'submit-signin') { void submitSignIn(); return }
+  if (action === 'submit-register') { void submitRegister(); return }
+  if (action === 'logout') { void logoutHCP(); return }
+
   if (action === 'add-drug' && id) { addDrugToPrescription(id); return }
   if (action === 'remove-drug' && id) { items = items.filter(i => i.id !== id); render(); return }
   if (action === 'clear-all') { items = []; render(); return }
@@ -1092,7 +1454,7 @@ app.addEventListener('click', event => {
   }
 })
 
-void loadDrugs()
+void checkAuthSession()
 mountChatWidget()
 
 // ── Response parser ────────────────────────────────────────────────────────────
