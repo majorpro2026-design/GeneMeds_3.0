@@ -11,6 +11,12 @@ let draft = ''
 
 let root: HTMLDivElement | null = null
 
+const PROMPTS = [
+  'CYP2D6 *4/*4 risk',
+  'CPIC Level A guidelines',
+  'Clopidogrel diplotype dosing',
+]
+
 /**
  * Mounts the assistant widget once, as a sibling of #app rather than inside
  * it, so it survives main.ts's full-innerHTML re-renders on every step
@@ -41,11 +47,14 @@ function renderChat() {
 
 function panel() {
   return `
-    <div class="chat-panel" role="dialog" aria-label="GeneMeds assistant">
+    <div class="chat-panel" role="dialog" aria-label="GeneMeds copilot">
       <div class="chat-panel-head">
-        <div>
-          <strong>GeneMeds Assistant</strong>
-          <span>Ask about the workflow or pharmacogenomics</span>
+        <div class="chat-panel-title">
+          <span class="chat-status-dot"></span>
+          <div>
+            <strong>GeneMeds Copilot</strong>
+            <span>Clinical Pharmacogenomic AI</span>
+          </div>
         </div>
         <button class="chat-close" data-chat-action="close" aria-label="Close">&times;</button>
       </div>
@@ -53,9 +62,14 @@ function panel() {
         ${messages.length ? messages.map(bubble).join('') : emptyChat()}
         ${sending ? typingBubble() : ''}
       </div>
-      ${error ? `<div class="chat-error">${escapeHtml(error)}</div>` : ''}
+      ${messages.length === 0 ? `
+        <div class="chat-prompts">
+          ${PROMPTS.map(p => `<button class="chat-prompt-pill" data-prompt="${escapeAttr(p)}">${escapeHtml(p)}</button>`).join('')}
+        </div>
+      ` : ''}
+      ${error ? `<div class="chat-error" style="padding:8px 16px;font-size:11.5px;color:#fca5a5;background:rgba(239,68,68,0.15);border-top:1px solid rgba(239,68,68,0.3)">${escapeHtml(error)}</div>` : ''}
       <form class="chat-input-row" data-chat-form>
-        <input id="chat-input" autocomplete="off" placeholder="Type a message..." value="${escapeAttr(draft)}" ${sending ? 'disabled' : ''}>
+        <input class="chat-input" id="chat-input" autocomplete="off" placeholder="Ask about drugs, genes, or CPIC guidance..." value="${escapeAttr(draft)}" ${sending ? 'disabled' : ''}>
         <button type="submit" class="chat-send" ${sending || !draft.trim() ? 'disabled' : ''} aria-label="Send">${sendIcon()}</button>
       </form>
     </div>
@@ -63,21 +77,44 @@ function panel() {
 }
 
 function emptyChat() {
-  return `<div class="chat-empty">Hi, I'm the GeneMeds assistant. Ask me about adding medicines, entering gene test results, or interpreting a recommendation.</div>`
+  return `
+    <div class="chat-welcome">
+      ${chatIcon()}
+      <h4>GeneMeds Copilot</h4>
+      <p>Ask about prescribed medicines, gene-drug interactions, diplotypes, or CPIC guideline recommendations.</p>
+    </div>
+  `
 }
 
 function bubble(m: ChatMessage) {
-  return `<div class="chat-bubble chat-bubble--${m.role}">${escapeHtml(m.content)}</div>`
+  const isBot = m.role === 'assistant'
+  return `
+    <div class="chat-msg ${isBot ? 'chat-msg-bot' : 'chat-msg-user'}">
+      ${escapeHtml(m.content)}
+    </div>
+  `
 }
 
 function typingBubble() {
-  return `<div class="chat-bubble chat-bubble--assistant chat-bubble--typing"><span></span><span></span><span></span></div>`
+  return `
+    <div class="chat-msg chat-msg-bot" style="display:flex;gap:4px;align-items:center">
+      <span class="spinner" style="width:12px;height:12px"></span>
+      <span style="font-size:11.5px;color:var(--text-muted)">Copilot is analyzing...</span>
+    </div>
+  `
 }
 
 function bind() {
   if (!root) return
   root.querySelector('[data-chat-action="toggle"]')?.addEventListener('click', () => { open = !open; renderChat() })
   root.querySelector('[data-chat-action="close"]')?.addEventListener('click', () => { open = false; renderChat() })
+
+  root.querySelectorAll<HTMLButtonElement>('.chat-prompt-pill').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = btn.dataset.prompt
+      if (p) { draft = p; void sendMessage() }
+    })
+  })
 
   const input = root.querySelector<HTMLInputElement>('#chat-input')
   input?.addEventListener('input', () => {

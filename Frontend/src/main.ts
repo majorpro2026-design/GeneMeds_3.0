@@ -97,6 +97,16 @@ const SUGGESTION_LIMIT = 6
 const CATALOG_LIMIT = 18
 
 // ── App state ──────────────────────────────────────────────────────────────────
+let currentTheme: 'dark' | 'light' = (localStorage.getItem('genemeds-theme') as 'dark' | 'light') ||
+  (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+
+function applyTheme(theme: 'dark' | 'light') {
+  currentTheme = theme
+  document.documentElement.setAttribute('data-theme', theme)
+  localStorage.setItem('genemeds-theme', theme)
+}
+applyTheme(currentTheme)
+
 let authChecking = true
 let currentHCP: HCPUser | null = null
 let authMode: 'signin' | 'register' = 'signin'
@@ -133,7 +143,7 @@ let saveState: Record<string, { loading: boolean; saved: boolean; error: string;
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 // ── Icons ──────────────────────────────────────────────────────────────────────
-const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' | 'refresh' | 'warning' | 'upload' | 'dna' | 'flask' | 'info') => {
+const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' | 'refresh' | 'warning' | 'upload' | 'dna' | 'flask' | 'info' | 'sun' | 'moon' | 'mail' | 'lock' | 'eye' | 'pill' | 'doc') => {
   const paths: Record<string, string> = {
     plus: '<path d="M12 5v14M5 12h14"/>',
     search: '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
@@ -147,11 +157,25 @@ const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' 
     dna: '<path d="M2 15c6.667-6 13.333 0 20-6M2 9c6.667 6 13.333 0 20 6M7 11.5c0 0 2-3 5-3s5 3 5 3M7 12.5c0 0 2 3 5 3s5-3 5-3"/>',
     flask: '<path d="M6 2v6l-2 4a4 4 0 0 0 3.4 6h5.2a4 4 0 0 0 3.4-6l-2-4V2"/><path d="M6 2h8"/><path d="M9 12h6"/>',
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+    lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    pill: '<path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><line x1="8.5" y1="8.5" x2="15.5" y2="15.5"/>',
+    doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
   }
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg>`
 }
 
-const geneLogo = `<svg class="gene-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#ffffff18" stroke-width="1.5" d="M24 4 39 10v11c0 10-6.2 18.2-15 23C15.2 39.2 9 31 9 21V10L24 4Z"/><path stroke="#d9efff" d="M17 14c8 0 6 20 14 20M31 14c-8 0-6 20-14 20M18 19h12M18 29h12"/><path stroke-width="2.3" d="M24 20v8m-4-4h8"/></svg>`
+const geneLogo = `<svg class="gene-logo" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <path d="M6 4C12 8 20 24 26 28M26 4C20 8 12 24 6 28" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M10 8C14 12 18 20 22 24M22 8C18 12 14 20 10 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity="0.6"/>
+  <line x1="8" y1="8" x2="24" y2="8" stroke="var(--primary)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="11" y1="13" x2="21" y2="13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="11" y1="19" x2="21" y2="19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="8" y1="24" x2="24" y2="24" stroke="var(--primary)" stroke-width="2" stroke-linecap="round"/>
+</svg>`
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function escapeHtml(value: string) {
@@ -346,24 +370,34 @@ function renderSignInForm() {
   return `
     <form class="auth-form" onsubmit="return false">
       <div class="auth-form-group">
-        <label for="signin-email">Email Address <b>*</b></label>
+        <label for="signin-email">Email address</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('mail')}</span>
           <input type="email" id="signin-email" class="auth-input" placeholder="doctor@example.com" autocomplete="email" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="signin-password">Password <b>*</b></label>
+        <label for="signin-password">Password</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('lock')}</span>
           <input type="password" id="signin-password" class="auth-input" placeholder="••••••••" autocomplete="current-password" required>
           <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="signin-password" title="Toggle password visibility">
-            ${icon('info')}
+            ${icon('eye')}
           </button>
         </div>
       </div>
 
+      <div class="auth-options">
+        <label class="auth-checkbox">
+          <input type="checkbox" checked>
+          <span>Keep me signed in</span>
+        </label>
+        <a href="#" class="auth-forgot" onclick="event.preventDefault(); alert('Please contact system administrator to reset password.');">Forgot password?</a>
+      </div>
+
       <button type="submit" class="primary auth-submit-btn" id="btn-signin-submit" data-action="submit-signin" ${authLoading ? 'disabled' : ''}>
-        ${authLoading ? '<span class="spinner"></span> Signing in...' : 'Sign In'}
+        ${authLoading ? '<span class="spinner"></span> Signing in...' : `Sign In ${icon('arrow')}`}
       </button>
     </form>
   `
@@ -373,48 +407,53 @@ function renderRegisterForm() {
   return `
     <form class="auth-form" onsubmit="return false">
       <div class="auth-form-group">
-        <label for="reg-fullname">Full Name <b>*</b></label>
+        <label for="reg-fullname">Full Name</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('info')}</span>
           <input type="text" id="reg-fullname" class="auth-input" placeholder="Dr. Jane Doe" autocomplete="name" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-number">Medical Registration Number <b>*</b></label>
+        <label for="reg-number">Medical Registration Number</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('doc')}</span>
           <input type="text" id="reg-number" class="auth-input" placeholder="e.g. MCI-123456" autocomplete="off" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-email">Email Address <b>*</b></label>
+        <label for="reg-email">Email Address</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('mail')}</span>
           <input type="email" id="reg-email" class="auth-input" placeholder="doctor@example.com" autocomplete="email" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-password">Password (min 8 characters) <b>*</b></label>
+        <label for="reg-password">Password (min 8 characters)</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('lock')}</span>
           <input type="password" id="reg-password" class="auth-input" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
           <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="reg-password" title="Toggle password visibility">
-            ${icon('info')}
+            ${icon('eye')}
           </button>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-confirm-password">Confirm Password <b>*</b></label>
+        <label for="reg-confirm-password">Confirm Password</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('lock')}</span>
           <input type="password" id="reg-confirm-password" class="auth-input" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
           <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="reg-confirm-password" title="Toggle password visibility">
-            ${icon('info')}
+            ${icon('eye')}
           </button>
         </div>
       </div>
 
       <button type="submit" class="primary auth-submit-btn" id="btn-register-submit" data-action="submit-register" ${authLoading ? 'disabled' : ''}>
-        ${authLoading ? '<span class="spinner"></span> Creating account...' : 'Create Account'}
+        ${authLoading ? '<span class="spinner"></span> Creating account...' : `Create Account ${icon('arrow')}`}
       </button>
     </form>
   `
@@ -430,6 +469,9 @@ function render() {
             <span class="brand-mark">${geneLogo}</span>
             <span>Gene<span>Meds</span></span>
           </a>
+          <button class="theme-toggle-btn" data-action="toggle-theme" title="Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">
+            ${currentTheme === 'dark' ? icon('sun') : icon('moon')}
+          </button>
         </header>
         <div class="auth-loading-splash">
           <span class="spinner"></span>
@@ -448,26 +490,68 @@ function render() {
             <span class="brand-mark">${geneLogo}</span>
             <span>Gene<span>Meds</span></span>
           </a>
+          <button class="theme-toggle-btn" data-action="toggle-theme" title="Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">
+            ${currentTheme === 'dark' ? icon('sun') : icon('moon')}
+          </button>
         </header>
 
-        <div class="auth-wrapper">
-          <div class="auth-card">
-            <div class="auth-header">
-              <span class="brand-mark">${geneLogo}</span>
-              <h1>Healthcare Professional Portal</h1>
-              <p>Sign in to your account or register to access clinical pharmacogenomic guidance.</p>
+        <div class="auth-layout">
+          <!-- Left Hero Column -->
+          <div class="auth-hero">
+            <div class="auth-hero-platform">PHARMACOGENOMICS PLATFORM</div>
+            <h1>Right drug.<br>For your <span class="highlight">genes</span>.</h1>
+            <p>Evidence-based pharmacogenomic guidance for safer, more effective treatment decisions.</p>
+            <hr class="auth-hero-divider">
+            <div class="auth-hero-stats">
+              <div class="auth-stat-badge">
+                ${icon('pill')}
+                <div>
+                  <strong>500+</strong>
+                  <small>Drugs</small>
+                </div>
+              </div>
+              <div class="auth-stat-badge">
+                ${icon('dna')}
+                <div>
+                  <strong>132+</strong>
+                  <small>Genes</small>
+                </div>
+              </div>
+              <div class="auth-stat-badge">
+                ${icon('doc')}
+                <div>
+                  <strong>CPIC</strong>
+                  <small>Guidelines</small>
+                </div>
+              </div>
             </div>
+          </div>
 
-            <div class="auth-tabs" role="tablist">
-              <button class="auth-tab ${authMode === 'signin' ? 'active' : ''}" data-action="set-auth-mode" data-mode="signin" role="tab">Sign In</button>
-              <button class="auth-tab ${authMode === 'register' ? 'active' : ''}" data-action="set-auth-mode" data-mode="register" role="tab">Register</button>
+          <!-- Right Form Panel -->
+          <div class="auth-panel">
+            <div class="auth-card">
+              <div class="auth-card-logo">
+                <span class="brand-mark">${geneLogo}</span>
+                <span class="brand" style="font-size:18px">Gene<span>Meds</span></span>
+              </div>
+              <h2>${authMode === 'signin' ? 'Welcome back' : 'Create an account'}</h2>
+              <p class="auth-sub">${authMode === 'signin' ? 'Sign in to your account to continue.' : 'Register as a Healthcare Professional.'}</p>
+
+              <div id="auth-error-container">
+                ${authError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(authError)}</div></div>` : ''}
+              </div>
+
+              ${authMode === 'signin' ? renderSignInForm() : renderRegisterForm()}
+
+              <div class="auth-divider">or</div>
+
+              <div class="auth-switch">
+                ${authMode === 'signin'
+                  ? `Don't have an account? <button class="auth-switch-btn" data-action="set-auth-mode" data-mode="register">Register</button>`
+                  : `Already have an account? <button class="auth-switch-btn" data-action="set-auth-mode" data-mode="signin">Sign In</button>`
+                }
+              </div>
             </div>
-
-            <div id="auth-error-container">
-              ${authError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(authError)}</div></div>` : ''}
-            </div>
-
-            ${authMode === 'signin' ? renderSignInForm() : renderRegisterForm()}
           </div>
         </div>
       </main>
@@ -493,13 +577,18 @@ function render() {
           <span class="brand-mark">${geneLogo}</span>
           <span>Gene<span>Meds</span></span>
         </a>
-        <div class="doctor">
-          <span class="avatar">${escapeHtml(initials)}</span>
-          <div>
-            <strong>${escapeHtml(currentHCP.fullName)}</strong>
-            <small>Reg: ${escapeHtml(currentHCP.registrationNumber)}</small>
+        <div class="header-right">
+          <button class="theme-toggle-btn" data-action="toggle-theme" title="Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">
+            ${currentTheme === 'dark' ? icon('sun') : icon('moon')}
+          </button>
+          <div class="doctor">
+            <span class="avatar">${escapeHtml(initials)}</span>
+            <div>
+              <strong>${escapeHtml(currentHCP.fullName)}</strong>
+              <small>Reg: ${escapeHtml(currentHCP.registrationNumber)}</small>
+            </div>
+            <button class="doctor-logout-btn" data-action="logout">Sign Out</button>
           </div>
-          <button class="doctor-logout-btn" data-action="logout">Sign Out</button>
         </div>
       </header>
 
@@ -1412,6 +1501,12 @@ app.addEventListener('click', event => {
     return
   }
 
+  if (action === 'toggle-theme') {
+    applyTheme(currentTheme === 'dark' ? 'light' : 'dark')
+    render()
+    return
+  }
+
   if (action === 'toggle-pw') {
     const targetId = actionEl?.dataset.target
     if (targetId) {
@@ -1447,10 +1542,31 @@ app.addEventListener('click', event => {
   if (action === 'extract-lab-report') { void extractLabReport(); return }
   if (action === 'get-recommendation') { void getRecommendation(); return }
 
+  if (action === 'focus-search') {
+    if (step !== 1) { step = 1; render() }
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>('#drug-search')
+      if (el) { el.focus(); el.select() }
+    }, 50)
+    return
+  }
+
   if (action === 'save-recommendation') {
     const drugName = target?.closest<HTMLElement>('[data-drug]')?.dataset.drug ?? ''
     if (drugName) void saveRecommendation(drugName)
     return
+  }
+})
+
+// Global keyboard shortcut (⌘K / Ctrl+K)
+window.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    if (step !== 1) { step = 1; render() }
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>('#drug-search')
+      if (el) { el.focus(); el.select() }
+    }, 50)
   }
 })
 
