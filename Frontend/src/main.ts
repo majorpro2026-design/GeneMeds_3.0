@@ -1,7 +1,7 @@
 import './style.css'
 import './catalogue.css'
 import './chat.css'
-import { mountChatWidget } from './chat'
+import { renderCopilotPanelHTML, bindCopilotEvents, type ClinicalContextState } from './chat'
 
 type Drug = {
   id: string
@@ -158,7 +158,33 @@ let recommendationError = ''
 let recommendationResults: RecommendationResult[] = []
 
 // Step 3 — save per drug
-let saveState: Record<string, { loading: boolean; saved: boolean; error: string; savedIds: RecommendationResult['savedRecordIds'] | null }> = {}
+// Copilot panel state
+let copilotCollapsed = localStorage.getItem('genemeds-copilot-collapsed') === 'true'
+
+function getClinicalContext(): ClinicalContextState {
+  return {
+    patient: selectedPatient ? { name: selectedPatient.full_name, dob: selectedPatient.dob, sex: selectedPatient.sex } : null,
+    items: items.map(item => ({
+      name: item.name,
+      dosage: item.dosage,
+      frequency: item.frequency,
+      duration: item.duration,
+      generics: item.generics,
+    })),
+    diplotypes: { ...diplotypeInputs },
+    suggestedTests: suggestedTests.map(t => ({ geneSymbol: t.geneSymbol, drugName: t.drugName })),
+    recommendations: recommendationResults.map(r => ({
+      drugName: r.drugName,
+      recommendation: r.recommendation?.drugRecommendation,
+      safetyStatus: r.drugSafetyStatus?.map(s => ({
+        geneSymbol: s.geneSymbol,
+        phenotypeName: s.phenotypeName,
+        status: s.status,
+        alternativeDrugGeneric: s.alternativeDrugGeneric,
+      })),
+    })),
+  }
+}
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
@@ -325,23 +351,51 @@ function uniqueGenes(): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const t of suggestedTests) {
-    if (t.geneSymbol && !seen.has(t.geneSymbol)) { seen.add(t.geneSymbol); out.push(t.geneSymbol) }
+    const gene = (t.geneSymbol || '').trim()
+    if (gene && !seen.has(gene.toUpperCase())) {
+      seen.add(gene.toUpperCase())
+      out.push(gene)
+    }
   }
   return out
 }
+
 function uniqueDrugNames(): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const t of suggestedTests) {
-    if (t.drugName && !seen.has(t.drugName)) { seen.add(t.drugName); out.push(t.drugName) }
+    const d = (t.drugName || '').trim()
+    if (d && !seen.has(d.toLowerCase())) {
+      seen.add(d.toLowerCase())
+      out.push(d)
+    }
+  }
+  if (out.length === 0) {
+    for (const item of items) {
+      const d = (item.selectedGeneric || item.name || '').trim()
+      if (d && !seen.has(d.toLowerCase())) {
+        seen.add(d.toLowerCase())
+        out.push(d)
+      }
+    }
   }
   return out
 }
+
 function genesForDrug(drugName: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
+  const target = drugName.trim().toLowerCase()
   for (const t of suggestedTests) {
-    if (t.drugName === drugName && t.geneSymbol && !seen.has(t.geneSymbol)) { seen.add(t.geneSymbol); out.push(t.geneSymbol) }
+    const d = (t.drugName || '').trim().toLowerCase()
+    const g = (t.geneSymbol || '').trim()
+    if ((d === target || !d) && g && !seen.has(g.toUpperCase())) {
+      seen.add(g.toUpperCase())
+      out.push(g)
+    }
+  }
+  if (out.length === 0) {
+    return uniqueGenes()
   }
   return out
 }
@@ -701,13 +755,17 @@ function render() {
     .toUpperCase() || 'DR'
 
   app.innerHTML = `
-    <main class="${step === 3 ? 'main-wide' : ''}">
-      <header>
+    <div class="workspace-layout ${copilotCollapsed ? 'copilot-layout--collapsed' : ''}">
+      <header class="workspace-header">
         <a class="brand" href="#" aria-label="GeneMeds home">
           <span class="brand-mark">${geneLogo}</span>
           <span>Gene<span>Meds</span></span>
         </a>
         <div class="header-right">
+          <button class="copilot-header-toggle ${copilotCollapsed ? 'collapsed' : ''}" data-action="toggle-copilot-panel" title="${copilotCollapsed ? 'Expand Copilot Panel' : 'Collapse Copilot Panel'}">
+            <span class="copilot-dot"></span>
+            <span>${copilotCollapsed ? 'Expand Copilot' : 'Copilot Active'}</span>
+          </button>
           <button class="theme-toggle-btn" data-action="toggle-theme" title="Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">
             ${currentTheme === 'dark' ? icon('sun') : icon('moon')}
           </button>
@@ -722,27 +780,58 @@ function render() {
         </div>
       </header>
 
-      ${step < 3 ? `
-      <section class="page-heading">
-        <div>
-          <h1>${step === 1 ? 'Create a new prescription' : 'Review drug & generic information'}</h1>
-          <p>${step === 1 ? 'Add medicines and treatment directions for your patient.' : 'Confirm the generic information for the prescribed medicines.'}</p>
-        </div>
-        <div class="step-count">Step <strong>${step}</strong> of 3</div>
-      </section>
-      ${stepper()}
-      ` : ''}
+      <div class="workspace-body">
+        <main class="clinical-stage ${step === 3 ? 'main-wide' : ''}">
+          ${step < 3 ? `
+          <section class="page-heading">
+            <div>
+              <h1>${step === 1 ? 'Create a new prescription' : 'Review drug & generic information'}</h1>
+              <p>${step === 1 ? 'Add medicines and treatment directions for your patient.' : 'Confirm the generic information for the prescribed medicines.'}</p>
+            </div>
+            <div class="step-count">Step <strong>${step}</strong> of 3</div>
+          </section>
+          ${stepper()}
+          ` : ''}
 
-      <div class="page-stage step-${step}">
-        ${step === 1 ? createStep() : step === 2 ? reviewStep() : resultsPage()}
+          <div class="page-stage step-${step}">
+            ${step === 1 ? createStep() : step === 2 ? reviewStep() : resultsPage()}
+          </div>
+        </main>
+
+        <aside class="copilot-aside-root" id="copilot-aside-root">
+          ${renderCopilotPanelHTML(getClinicalContext(), copilotCollapsed)}
+        </aside>
       </div>
-    </main>
+    </div>
     ${renderCreatePatientModalHTML()}
   `
 
   syncSearchSuggestions()
   syncUploadState()
   syncLabFileLabel()
+
+  const copilotRoot = document.querySelector<HTMLElement>('#copilot-aside-root')
+  if (copilotRoot) {
+    bindCopilotEvents(
+      copilotRoot,
+      getClinicalContext,
+      () => {
+        copilotCollapsed = !copilotCollapsed
+        localStorage.setItem('genemeds-copilot-collapsed', String(copilotCollapsed))
+        render()
+      },
+      () => {
+        if (copilotRoot) {
+          copilotRoot.innerHTML = renderCopilotPanelHTML(getClinicalContext(), copilotCollapsed)
+          bindCopilotEvents(copilotRoot, getClinicalContext, () => {
+            copilotCollapsed = !copilotCollapsed
+            localStorage.setItem('genemeds-copilot-collapsed', String(copilotCollapsed))
+            render()
+          })
+        }
+      }
+    )
+  }
 }
 
 function patientSection() {
@@ -959,7 +1048,7 @@ function createStep() {
 
       <footer class="card-footer">
         <span class="completion-note">${allComplete() ? 'All treatment details are complete.' : items.length ? 'Complete dosage, frequency, and duration for each medicine.' : 'Add at least one medicine to continue.'}</span>
-        <button class="primary" data-action="submit-prescription" ${allComplete() || submitting ? '' : 'disabled'}>${submitting ? '<span class="spinner"></span> Uploading...' : `Upload prescription ${icon('arrow')}`}</button>
+        <button class="primary" data-action="submit-prescription" ${allComplete() || submitting ? '' : 'disabled'}>${submitting ? '<span class="spinner"></span> Uploading...' : `Proceed ${icon('arrow')}`}</button>
       </footer>
     </section>
   `
@@ -1595,22 +1684,37 @@ async function getRecommendation() {
   if (recommendationLoading) return
 
   // Sync any diplotype input values from the live DOM into state before render()
-  // destroys the elements. This ensures OCR-filled or programmatically set values
-  // that didn't go through the input event handler are captured.
   document.querySelectorAll<HTMLInputElement>('[data-action="diplotype-input"][data-gene]')
     .forEach(el => {
       const gene = el.dataset.gene
       if (gene && el.value.trim()) diplotypeInputs[gene] = el.value.trim()
     })
 
-  recommendationLoading = true; recommendationError = ''; recommendationResults = []; render()
+  const drugNames = uniqueDrugNames()
+  console.log('[RECOMMENDATIONS] Fetching for drugNames =', drugNames)
+  console.log('[RECOMMENDATIONS] Current diplotypeInputs =', diplotypeInputs)
+
+  if (drugNames.length === 0) {
+    console.warn('[RECOMMENDATIONS] No drug names found for recommendation lookup.')
+    recommendationError = 'No medicines found in prescription to look up recommendations.'
+    render()
+    return
+  }
+
+  recommendationLoading = true
+  recommendationError = ''
+  recommendationResults = []
+  render()
 
   try {
     const results = await Promise.all(
-      uniqueDrugNames().map(async drugName => {
+      drugNames.map(async drugName => {
         const diplotypes = genesForDrug(drugName)
           .filter(g => (diplotypeInputs[g] ?? '').trim())
           .map(g => ({ geneSymbol: g, diplotypeName: diplotypeInputs[g].trim() }))
+
+        console.log(`[RECOMMENDATIONS] Calling POST /api/gene-recommendation for '${drugName}' with diplotypes:`, diplotypes)
+
         try {
           const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
             method: 'POST',
@@ -1623,6 +1727,8 @@ async function getRecommendation() {
               enteredByDoctorId: currentHCP?.id ?? null,
             }),
           })
+          console.log(`[RECOMMENDATIONS] Response status for '${drugName}':`, response.status)
+
           if (response.status === 401) {
             currentHCP = null
             authError = 'Session expired. Please sign in again.'
@@ -1634,17 +1740,22 @@ async function getRecommendation() {
             return { drugName, found: false, reason: err.detail ?? `Failed with status ${response.status}` } as RecommendationResult
           }
           const body = (await response.json()) as RecommendationResult
+          console.log(`[RECOMMENDATIONS] Received result for '${drugName}':`, body)
           return { ...body, drugName }
         } catch (error) {
+          console.error(`[RECOMMENDATIONS] Fetch error for '${drugName}':`, error)
           return { drugName, found: false, reason: error instanceof Error ? error.message : 'Network error.' } as RecommendationResult
         }
       })
     )
+    console.log('[RECOMMENDATIONS] All results received =', results)
     recommendationResults = results
   } catch (error) {
+    console.error('[RECOMMENDATIONS] Error in getRecommendation =', error)
     recommendationError = error instanceof Error ? error.message : 'Could not fetch recommendations.'
   } finally {
-    recommendationLoading = false; render()
+    recommendationLoading = false
+    render()
   }
 }
 
@@ -1954,6 +2065,13 @@ app.addEventListener('click', event => {
     return
   }
 
+  if (action === 'toggle-copilot-panel') {
+    copilotCollapsed = !copilotCollapsed
+    localStorage.setItem('genemeds-copilot-collapsed', String(copilotCollapsed))
+    render()
+    return
+  }
+
   if (action === 'toggle-theme') {
     applyTheme(currentTheme === 'dark' ? 'light' : 'dark')
     document.querySelectorAll<HTMLButtonElement>('.theme-toggle-btn').forEach(btn => {
@@ -2027,7 +2145,6 @@ window.addEventListener('keydown', event => {
 })
 
 void checkAuthSession()
-mountChatWidget()
 
 // ── Response parser ────────────────────────────────────────────────────────────
 function extractSuggestedTests(value: unknown): SuggestedTest[] {

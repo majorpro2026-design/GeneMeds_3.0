@@ -1,167 +1,304 @@
 type ChatRole = 'user' | 'assistant'
-type ChatMessage = { role: ChatRole; content: string }
+type ChatMessage = { role: ChatRole; content: string; time?: string }
+
+export type ClinicalContextState = {
+  patient: { name: string; dob: string; sex: string } | null
+  items: { name: string; dosage: string; frequency: string; duration: string; generics: string[] }[]
+  diplotypes: Record<string, string>
+  suggestedTests: { geneSymbol: string; drugName: string }[]
+  recommendations: { drugName: string; recommendation?: string; safetyStatus?: { geneSymbol: string; phenotypeName: string; status: string; alternativeDrugGeneric: string | null }[] }[]
+}
 
 const CHAT_ENDPOINT = import.meta.env.VITE_CHAT_API_URL ?? '/api/chat'
 
-let open = false
 let sending = false
 let error = ''
 let messages: ChatMessage[] = []
 let draft = ''
 
-let root: HTMLDivElement | null = null
-
 const PROMPTS = [
-  'CYP2D6 *4/*4 risk',
-  'CPIC Level A guidelines',
-  'Clopidogrel diplotype dosing',
+  { text: 'Explain PGx findings for this prescription', icon: '🧬' },
+  { text: 'Why is CYP2C19 / CYP2D6 relevant here?', icon: '💊' },
+  { text: 'What alternate drugs are recommended?', icon: '📋' },
+  { text: 'Summarize clinical guidance for this patient', icon: '⚕️' },
 ]
 
-/**
- * Mounts the assistant widget once, as a sibling of #app rather than inside
- * it, so it survives main.ts's full-innerHTML re-renders on every step
- * change and keeps its own conversation state throughout the workflow.
- */
-export function mountChatWidget() {
-  if (root) return
-  root = document.createElement('div')
-  root.id = 'chat-widget-root'
-  document.body.appendChild(root)
-  renderChat()
-}
+export function renderCopilotPanelHTML(context: ClinicalContextState, collapsed: boolean): string {
+  if (collapsed) {
+    return `
+      <div class="copilot-panel copilot-panel--collapsed">
+        <button class="copilot-expand-btn" data-copilot-action="toggle-collapse" title="Expand GeneMeds Copilot">
+          <span class="copilot-status-dot"></span>
+          <span class="copilot-expand-title">GeneMeds Copilot</span>
+          <span class="copilot-expand-icon">◀</span>
+        </button>
+      </div>
+    `
+  }
 
-function renderChat() {
-  if (!root) return
-  root.innerHTML = `
-    <div class="chat-widget ${open ? 'chat-widget--open' : ''}">
-      ${open ? panel() : ''}
-      <button class="chat-toggle" data-chat-action="toggle" aria-label="${open ? 'Close assistant' : 'Open assistant'}">
-        ${open ? closeIcon() : chatIcon()}
-      </button>
-    </div>
-  `
-  bind()
-  scrollToBottom()
-  if (open) root.querySelector<HTMLInputElement>('#chat-input')?.focus()
-}
+  const patientName = context.patient ? context.patient.name : 'No patient'
+  const medsCount = context.items.length
+  const filledDips = Object.values(context.diplotypes).filter(v => (v ?? '').trim()).length
+  const recsCount = context.recommendations.filter(r => r.recommendation).length
 
-function panel() {
   return `
-    <div class="chat-panel" role="dialog" aria-label="GeneMeds copilot">
-      <div class="chat-panel-head">
-        <div class="chat-panel-title">
-          <span class="chat-status-dot"></span>
+    <div class="copilot-panel" role="region" aria-label="GeneMeds Copilot workspace panel">
+      <!-- Header -->
+      <div class="copilot-head">
+        <div class="copilot-title">
+          <span class="copilot-status-dot"></span>
           <div>
             <strong>GeneMeds Copilot</strong>
-            <span>Clinical Pharmacogenomic AI</span>
+            <span>Clinical Decision Support AI</span>
           </div>
         </div>
-        <button class="chat-close" data-chat-action="close" aria-label="Close">&times;</button>
+        <button class="copilot-action-btn" data-copilot-action="toggle-collapse" title="Collapse Copilot panel">
+          <span class="copilot-icon-collapse">▶</span>
+          <span class="copilot-btn-label">Collapse</span>
+        </button>
       </div>
-      <div class="chat-body" id="chat-body">
-        ${messages.length ? messages.map(bubble).join('') : emptyChat()}
-        ${sending ? typingBubble() : ''}
+
+      <!-- Clinical Context Indicator Bar -->
+      <div class="copilot-context-bar">
+        <div class="copilot-context-chip ${context.patient ? 'active' : ''}" title="Active Patient">
+          <span class="copilot-context-dot"></span>
+          <span>${escapeHtml(patientName)}</span>
+        </div>
+        <div class="copilot-context-chip ${medsCount > 0 ? 'active' : ''}" title="Prescribed Medicines">
+          <span>💊 ${medsCount} ${medsCount === 1 ? 'drug' : 'drugs'}</span>
+        </div>
+        <div class="copilot-context-chip ${filledDips > 0 || recsCount > 0 ? 'active' : ''}" title="PGx Status">
+          <span>${recsCount > 0 ? `✅ ${recsCount} Recs` : filledDips > 0 ? `🧬 ${filledDips} Genes` : 'Step 1: Draft'}</span>
+        </div>
       </div>
+
+      <!-- Conversation Area -->
+      <div class="copilot-body" id="copilot-chat-body">
+        ${messages.length ? messages.map(renderMessageBubble).join('') : renderWelcomeState()}
+        ${sending ? renderTypingBubble() : ''}
+      </div>
+
+      <!-- Quick Action Prompts (When Empty) -->
       ${messages.length === 0 ? `
-        <div class="chat-prompts">
-          ${PROMPTS.map(p => `<button class="chat-prompt-pill" data-prompt="${escapeAttr(p)}">${escapeHtml(p)}</button>`).join('')}
+        <div class="copilot-prompts">
+          <div class="copilot-prompts-heading">Suggested Clinical Queries</div>
+          <div class="copilot-prompts-grid">
+            ${PROMPTS.map(p => `
+              <button class="copilot-prompt-chip" data-copilot-prompt="${escapeAttr(p.text)}">
+                <span class="prompt-icon">${p.icon}</span>
+                <span>${escapeHtml(p.text)}</span>
+              </button>
+            `).join('')}
+          </div>
         </div>
       ` : ''}
-      ${error ? `<div class="chat-error" style="padding:8px 16px;font-size:11.5px;color:#fca5a5;background:rgba(239,68,68,0.15);border-top:1px solid rgba(239,68,68,0.3)">${escapeHtml(error)}</div>` : ''}
-      <form class="chat-input-row" data-chat-form>
-        <input class="chat-input" id="chat-input" autocomplete="off" placeholder="Ask about drugs, genes, or CPIC guidance..." value="${escapeAttr(draft)}" ${sending ? 'disabled' : ''}>
-        <button type="submit" class="chat-send" ${sending || !draft.trim() ? 'disabled' : ''} aria-label="Send">${sendIcon()}</button>
+
+      ${error ? `<div class="copilot-error-banner"><span>⚠️</span> ${escapeHtml(error)}</div>` : ''}
+
+      <!-- Sticky Input Bar -->
+      <form class="copilot-input-form" data-copilot-form onsubmit="return false">
+        <div class="copilot-input-container">
+          <textarea
+            class="copilot-textarea"
+            id="copilot-input"
+            rows="1"
+            placeholder="Ask about this patient, drug, or result..."
+            ${sending ? 'disabled' : ''}
+          >${escapeHtml(draft)}</textarea>
+          <button type="submit" class="copilot-send-btn" ${sending || !draft.trim() ? 'disabled' : ''} aria-label="Send message">
+            ${sendIcon()}
+          </button>
+        </div>
       </form>
     </div>
   `
 }
 
-function emptyChat() {
+function renderWelcomeState(): string {
   return `
-    <div class="chat-welcome">
-      ${chatIcon()}
-      <h4>GeneMeds Copilot</h4>
-      <p>Ask about prescribed medicines, gene-drug interactions, diplotypes, or CPIC guideline recommendations.</p>
+    <div class="copilot-welcome">
+      <div class="copilot-welcome-icon">⚕️</div>
+      <h4>GeneMeds Clinical Copilot</h4>
+      <p>Real-time AI decision-support contextualized to your active patient, prescribed medicines, and CPIC pharmacogenomic guidelines.</p>
     </div>
   `
 }
 
-function bubble(m: ChatMessage) {
+function renderMessageBubble(m: ChatMessage): string {
   const isBot = m.role === 'assistant'
+  const roleName = isBot ? 'GENEMEDS COPILOT' : 'CLINICIAN'
+  const timeStr = m.time || ''
+
   return `
-    <div class="chat-msg ${isBot ? 'chat-msg-bot' : 'chat-msg-user'}">
-      ${escapeHtml(m.content)}
+    <div class="copilot-msg ${isBot ? 'copilot-msg--bot' : 'copilot-msg--user'}">
+      <div class="copilot-msg-meta">
+        <span class="copilot-msg-role">${roleName}</span>
+        ${timeStr ? `<span class="copilot-msg-time">${escapeHtml(timeStr)}</span>` : ''}
+      </div>
+      <div class="copilot-msg-bubble">
+        ${isBot ? formatMarkdown(m.content) : escapeHtml(m.content)}
+      </div>
     </div>
   `
 }
 
-function typingBubble() {
+function renderTypingBubble(): string {
   return `
-    <div class="chat-msg chat-msg-bot" style="display:flex;gap:4px;align-items:center">
-      <span class="spinner" style="width:12px;height:12px"></span>
-      <span style="font-size:11.5px;color:var(--text-muted)">Copilot is analyzing...</span>
+    <div class="copilot-msg copilot-msg--bot">
+      <div class="copilot-msg-meta">
+        <span class="copilot-msg-role">GENEMEDS COPILOT</span>
+      </div>
+      <div class="copilot-msg-bubble copilot-typing">
+        <span class="spinner" style="width:12px;height:12px;display:inline-block"></span>
+        <span>Analyzing clinical context...</span>
+      </div>
     </div>
   `
 }
 
-function bind() {
-  if (!root) return
-  root.querySelector('[data-chat-action="toggle"]')?.addEventListener('click', () => { open = !open; renderChat() })
-  root.querySelector('[data-chat-action="close"]')?.addEventListener('click', () => { open = false; renderChat() })
+export function bindCopilotEvents(
+  container: HTMLElement,
+  getContext: () => ClinicalContextState,
+  onToggleCollapse: () => void,
+  onStateChanged?: () => void
+) {
+  if (!container) return
 
-  root.querySelectorAll<HTMLButtonElement>('.chat-prompt-pill').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const p = btn.dataset.prompt
-      if (p) { draft = p; void sendMessage() }
+  // Collapse / Expand toggle button
+  container.querySelectorAll('[data-copilot-action="toggle-collapse"]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      onToggleCollapse()
     })
   })
 
-  const input = root.querySelector<HTMLInputElement>('#chat-input')
-  input?.addEventListener('input', () => {
-    draft = input.value
-    const btn = root?.querySelector<HTMLButtonElement>('.chat-send')
-    if (btn) btn.disabled = sending || !draft.trim()
+  // Quick Prompt Chips
+  container.querySelectorAll<HTMLButtonElement>('.copilot-prompt-chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const p = btn.dataset.copilotPrompt
+      if (p) {
+        draft = p
+        void triggerSendMessage(getContext, onStateChanged)
+      }
+    })
   })
 
-  const form = root.querySelector<HTMLFormElement>('[data-chat-form]')
-  form?.addEventListener('submit', event => { event.preventDefault(); void sendMessage() })
+  // Textarea input
+  const textarea = container.querySelector<HTMLTextAreaElement>('#copilot-input')
+  if (textarea) {
+    textarea.addEventListener('input', () => {
+      draft = textarea.value
+      const sendBtn = container.querySelector<HTMLButtonElement>('.copilot-send-btn')
+      if (sendBtn) sendBtn.disabled = sending || !draft.trim()
+    })
+
+    textarea.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        void triggerSendMessage(getContext, onStateChanged)
+      }
+    })
+  }
+
+  // Form submit
+  const form = container.querySelector<HTMLFormElement>('[data-copilot-form]')
+  if (form) {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault()
+      void triggerSendMessage(getContext, onStateChanged)
+    })
+  }
+
+  scrollToBottom(container)
 }
 
-async function sendMessage() {
+async function triggerSendMessage(getContext: () => ClinicalContextState, onStateChanged?: () => void) {
   const text = draft.trim()
   if (!text || sending) return
-  messages = [...messages, { role: 'user', content: text }]
+
+  const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  messages = [...messages, { role: 'user', content: text, time: now }]
   draft = ''
   sending = true
   error = ''
-  renderChat()
+  if (onStateChanged) onStateChanged()
+
+  const ctx = getContext()
 
   try {
     const response = await fetch(CHAT_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
+        context: {
+          patient: ctx.patient,
+          medicines: ctx.items,
+          diplotypes: ctx.diplotypes,
+          suggestedTests: ctx.suggestedTests,
+          recommendations: ctx.recommendations,
+        },
+      }),
     })
+
     if (!response.ok) {
       const err = (await response.json().catch(() => ({}))) as { detail?: string }
       throw new Error(err.detail ?? `Assistant request failed with status ${response.status}`)
     }
+
     const body = (await response.json()) as { reply?: string }
-    if (body.reply) messages = [...messages, { role: 'assistant', content: body.reply }]
+    if (body.reply) {
+      const botTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      messages = [...messages, { role: 'assistant', content: body.reply, time: botTime }]
+    }
   } catch (err) {
     error = err instanceof Error ? err.message : 'Could not reach the assistant.'
   } finally {
     sending = false
-    renderChat()
+    if (onStateChanged) onStateChanged()
   }
 }
 
-function scrollToBottom() {
-  const body = root?.querySelector<HTMLElement>('#chat-body')
-  if (body) body.scrollTop = body.scrollHeight
+function scrollToBottom(container: HTMLElement) {
+  const body = container.querySelector<HTMLElement>('#copilot-chat-body')
+  if (body) {
+    body.scrollTop = body.scrollHeight
+  }
 }
 
-function escapeHtml(value: string) {
+function formatMarkdown(text: string): string {
+  if (!text) return ''
+  let html = escapeHtml(text)
+
+  // Bold text **foo**
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+  // Italic *foo*
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>')
+  // Gene code chips `foo`
+  html = html.replace(/`([^`]+)`/g, '<code class="gene-code-chip">$1</code>')
+
+  const lines = html.split('\n')
+  const out: string[] = []
+  let inList = false
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (line.startsWith('- ') || line.startsWith('* ')) {
+      if (!inList) { inList = true; out.push('<ul class="copilot-list">') }
+      out.push(`<li>${line.substring(2)}</li>`)
+    } else {
+      if (inList) { inList = false; out.push('</ul>') }
+      if (line) {
+        out.push(`<p>${line}</p>`)
+      }
+    }
+  }
+  if (inList) out.push('</ul>')
+
+  return out.join('')
+}
+
+function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
@@ -169,14 +306,11 @@ function escapeHtml(value: string) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;')
 }
-function escapeAttr(value: string) { return escapeHtml(value) }
 
-function chatIcon() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8z"/></svg>`
+function escapeAttr(value: string): string {
+  return escapeHtml(value)
 }
-function closeIcon() {
-  return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>`
-}
-function sendIcon() {
+
+function sendIcon(): string {
   return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>`
 }
