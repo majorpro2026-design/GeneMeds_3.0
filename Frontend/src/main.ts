@@ -156,8 +156,15 @@ let ocrExtractedLines: string[] = []
 let recommendationLoading = false
 let recommendationError = ''
 let recommendationResults: RecommendationResult[] = []
+let selectedRecDrugIndex = 0
+let leftContextCollapsed: Record<string, boolean> = {
+  medicines: false,
+  genes: false,
+  results: false,
+}
 
 // Step 3 — save per drug
+let saveState: Record<string, { loading: boolean; saved: boolean; error: string; savedIds: { resultIds: number[]; assessmentId: number | null } | null }> = {}
 // Copilot panel state
 let copilotCollapsed = localStorage.getItem('genemeds-copilot-collapsed') === 'true'
 
@@ -781,20 +788,18 @@ function render() {
       </header>
 
       <div class="workspace-body">
-        <main class="clinical-stage ${step === 3 ? 'main-wide' : ''}">
-          ${step < 3 ? `
+        <main class="clinical-stage">
           <section class="page-heading">
             <div>
-              <h1>${step === 1 ? 'Create a new prescription' : 'Review drug & generic information'}</h1>
-              <p>${step === 1 ? 'Add medicines and treatment directions for your patient.' : 'Confirm the generic information for the prescribed medicines.'}</p>
+              <h1>${step === 1 ? 'Create a new prescription' : step === 2 ? 'Enter Genetic Test Results' : 'Clinical Recommendation'}</h1>
+              <p>${step === 1 ? 'Add medicines and treatment directions for your patient.' : step === 2 ? 'Review recommended gene tests and enter patient diplotypes.' : 'Personalized pharmacogenomic guidance for this prescription.'}</p>
             </div>
             <div class="step-count">Step <strong>${step}</strong> of 3</div>
           </section>
           ${stepper()}
-          ` : ''}
 
           <div class="page-stage step-${step}">
-            ${step === 1 ? createStep() : step === 2 ? reviewStep() : resultsPage()}
+            ${step === 1 ? createStep() : step === 2 ? resultsPage() : recommendationStep()}
           </div>
         </main>
 
@@ -992,12 +997,13 @@ function renderCreatePatientModalHTML() {
 }
 
 function stepper() {
-  const labels = ['Create prescription', 'Review drug info', 'Gene test results']
+  const labels = ['Prescription', 'Genetic Results', 'Clinical Recommendation']
   return `<nav class="stepper" aria-label="Prescription steps">${labels
     .map((label, index) => {
       const n = index + 1
       const state = n === step ? 'active' : n < step ? 'done' : ''
-      return `<div class="step ${state}"><span class="step-number">${n < step ? icon('check') : n}</span><span>${label}</span></div>${n < 3 ? '<div class="step-line"></div>' : ''}`
+      const clickable = n === 1 || (n === 2 && (step >= 2 || submitted)) || (n === 3 && recommendationResults.length > 0)
+      return `<div class="step ${state} ${clickable ? 'step--clickable' : ''}" ${clickable ? `data-action="go-to-step" data-step-num="${n}"` : ''}><span class="step-number">${n < step ? icon('check') : n}</span><span>${label}</span></div>${n < 3 ? '<div class="step-line"></div>' : ''}`
     })
     .join('')}</nav>`
 }
@@ -1093,40 +1099,12 @@ function drugForm(item: PrescriptionDrug, index: number) {
   `
 }
 
-// ── Step 2: Review generics ───────────────────────────────────────────────────
-function reviewStep() {
-  return `
-    <section class="card review-card">
-      <div class="card-title">
-        <div>
-          <h2>Generic information</h2>
-          <p>Review the source and selected generic for every prescribed medicine.</p>
-        </div>
-        <span class="verified">${icon('check')} Verified data</span>
-      </div>
-      <div class="review-table">
-        <div class="table-head"><span>DRUG</span><span>GENERIC NAME(S)</span><span>SELECTED GENERIC</span><span>SOURCE</span></div>
-        ${items.map(item => `
-          <article class="table-row">
-            <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.strength)}</small></div>
-            <div class="generic-tags">${item.generics.map(g => `<span>${escapeHtml(g)}</span>`).join('')}</div>
-            <div class="selected">${icon('check')} ${escapeHtml(item.selectedGeneric)}</div>
-            <div class="source">${escapeHtml(item.source)}</div>
-          </article>`).join('')}
-      </div>
-      <footer class="card-footer">
-        <button class="secondary" data-action="back-to-create">Back</button>
-        <button class="primary" data-action="next-step">Continue to gene results ${icon('arrow')}</button>
-      </footer>
-    </section>
-  `
-}
+// ── Step 2: Genetic results & diplotype entry ─────────────────────────
 
 // ── Step 3: Full-width results page ───────────────────────────────────────────
 function resultsPage() {
   const genes = uniqueGenes()
   const hasAnyDiplotype = genes.some(g => (diplotypeInputs[g] ?? '').trim())
-  const hasAnyResult = recommendationResults.some(r => r.found && r.recommendation)
   const actionableCount = recommendationResults.filter(r => r.found && r.recommendation).length
 
   return `
@@ -1258,31 +1236,361 @@ function resultsPage() {
                 ? `<span class="get-rec-ready">${icon('check')} Ready — unfilled genes will be listed as missing in the result</span>`
                 : `<span class="get-rec-hint">${icon('info')} Enter at least one diplotype to get a recommendation</span>`}
             </div>
-            <button class="primary get-rec-btn" data-action="get-recommendation" ${recommendationLoading || !hasAnyDiplotype ? 'disabled' : ''}>
-              ${recommendationLoading ? '<span class="spinner"></span> Generating…' : `${icon('dna')} Get Recommendation`}
-            </button>
+            <div style="display:flex;gap:10px;align-items:center;">
+              ${recommendationResults.length ? `
+                <button class="secondary" data-action="go-to-step" data-step-num="3" type="button">
+                  View Recommendations ${icon('arrow')}
+                </button>
+              ` : ''}
+              <button class="primary get-rec-btn" data-action="get-recommendation" ${recommendationLoading || !hasAnyDiplotype ? 'disabled' : ''}>
+                ${recommendationLoading ? '<span class="spinner"></span> Generating…' : `${icon('dna')} Get Recommendation ${icon('arrow')}`}
+              </button>
+            </div>
           </div>
           ${recommendationError ? `<div class="entry-error" style="margin-top:12px">${icon('warning')} ${escapeHtml(recommendationError)}</div>` : ''}
         </div>
         ` : ''}
+      </div>
+    </div>
+  `
+}
 
-        <!-- Section 03 -->
-        ${recommendationResults.length ? `
-        <div class="rp-sec">
-          <div class="rp-sec-label">
-            <span class="rp-sec-num">03</span>
-            <div>
-              <h2 class="rp-sec-title">Clinical Recommendations</h2>
-              <p class="rp-sec-sub">CPIC-based pharmacogenomic guidance for each prescribed medicine.</p>
+// ── Step 3: Dedicated Clinical Recommendation Workspace ───────────────────────
+function recommendationStep(): string {
+  if (!selectedPatient) {
+    return `
+      <div class="card" style="padding: 40px; text-align: center;">
+        <div style="font-size: 32px; margin-bottom: 12px;">⚠️</div>
+        <h3 style="font-size: 18px; margin-bottom: 8px;">No Patient Selected</h3>
+        <p style="color: var(--text-muted); margin-bottom: 20px;">Please return to Step 1 to select or create a patient before reviewing recommendations.</p>
+        <button class="primary" data-action="back-to-create">${icon('arrow')} Return to Step 1</button>
+      </div>
+    `
+  }
+
+  const genes = uniqueGenes()
+  const recResults = recommendationResults
+  const activeIndex = Math.min(selectedRecDrugIndex, Math.max(0, recResults.length - 1))
+  const currentRec = recResults[activeIndex] || (recResults.length ? recResults[0] : null)
+
+  return `
+    <div class="rec-workspace-layout">
+      <!-- Left Context Panel (Evidence Trail) -->
+      <aside class="rec-left-context">
+        <div class="rec-context-card">
+          <div class="rec-context-header">
+            <h3>Clinical Context</h3>
+            <span class="rec-context-badge">Evidence Trail</span>
+          </div>
+
+          <!-- Section 1: Prescribed Medicines -->
+          <div class="rec-context-sec ${leftContextCollapsed.medicines ? 'collapsed' : ''}">
+            <button class="rec-context-sec-title" data-action="toggle-left-sec" data-sec="medicines" type="button">
+              <span>PRESCRIBED MEDICINES</span>
+              <span class="rec-collapse-arrow">${icon('chevron')}</span>
+            </button>
+            <div class="rec-context-sec-content">
+              ${items.length ? items.map(item => `
+                <div class="rec-context-med-item">
+                  <strong>${escapeHtml(item.name)}</strong>
+                  <small>${escapeHtml(item.strength)} · ${escapeHtml(item.dosage || 'Dosage pending')} ${escapeHtml(item.frequency || '')}</small>
+                </div>
+              `).join('') : '<div class="rec-none-text">No medicines listed</div>'}
             </div>
           </div>
-          ${hasAnyResult ? `<div class="rc-section-summary">${icon('check')} ${actionableCount} of ${recommendationResults.length} drug${recommendationResults.length !== 1 ? 's have' : ' has'} actionable recommendations</div>` : ''}
-          ${renderRecommendationBlocks()}
-          ${hasAnyResult ? `<p class="rc-disclaimer">${icon('info')} These recommendations are derived from CPIC guidelines. Apply clinical judgement before acting on any suggestion.</p>` : ''}
+
+          <!-- Section 2: Affected Genes -->
+          <div class="rec-context-sec ${leftContextCollapsed.genes ? 'collapsed' : ''}">
+            <button class="rec-context-sec-title" data-action="toggle-left-sec" data-sec="genes" type="button">
+              <span>AFFECTED GENES</span>
+              <span class="rec-collapse-arrow">${icon('chevron')}</span>
+            </button>
+            <div class="rec-context-sec-content">
+              <div class="rec-gene-tags">
+                ${genes.length ? genes.map(g => `<span class="gene-chip">${escapeHtml(g)}</span>`).join('') : '<span class="rec-none-text">No genes identified</span>'}
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 3: Genetic Results -->
+          <div class="rec-context-sec ${leftContextCollapsed.results ? 'collapsed' : ''}">
+            <button class="rec-context-sec-title" data-action="toggle-left-sec" data-sec="results" type="button">
+              <span>GENETIC RESULTS</span>
+              <span class="rec-collapse-arrow">${icon('chevron')}</span>
+            </button>
+            <div class="rec-context-sec-content">
+              ${genes.length ? genes.map(gene => {
+                const dip = (diplotypeInputs[gene] ?? '').trim()
+                const phenoObj = currentRec?.phenotypes?.[gene]
+                const pheno = phenoObj?.phenotypeName
+                return `
+                  <div class="rec-context-result-item">
+                    <div class="rec-context-result-gene">
+                      <span class="gene-chip">${escapeHtml(gene)}</span>
+                      <code class="rec-dip-val">${escapeHtml(dip || 'Not entered')}</code>
+                    </div>
+                    ${pheno ? `<div class="rec-pheno-val">${escapeHtml(pheno)}</div>` : ''}
+                  </div>
+                `
+              }).join('') : '<div class="rec-none-text">No genetic results entered</div>'}
+              ${ocrExtractedLines.length ? `<div class="rec-ocr-tag">${icon('flask')} Lab OCR Extracted</div>` : ''}
+            </div>
+          </div>
+
         </div>
+      </aside>
+
+      <!-- Center Main Recommendation Workspace -->
+      <main class="rec-center-main">
+
+        <!-- Patient Identity Banner -->
+        <div class="rec-patient-banner">
+          <div class="rec-patient-avatar">${escapeHtml(getInitials(selectedPatient.full_name))}</div>
+          <div class="rec-patient-info">
+            <div class="rec-patient-name-line">
+              <h2 class="rec-patient-name">${escapeHtml(selectedPatient.full_name)}</h2>
+              <span class="rec-patient-id">P${String(selectedPatient.patient_id).padStart(5, '0')}</span>
+            </div>
+            <div class="rec-patient-meta-line">
+              <span>DOB: ${formatDob(selectedPatient.dob)}</span>
+              <span class="dot-sep">•</span>
+              <span>Sex: ${escapeHtml(selectedPatient.sex)}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Multiple Medicine Selector Tabs -->
+        ${recResults.length > 1 ? `
+          <div class="rec-medicine-tabs" role="tablist">
+            ${recResults.map((r, i) => `
+              <button
+                class="rec-med-tab ${i === activeIndex ? 'active' : ''}"
+                data-action="select-rec-tab"
+                data-index="${i}"
+                role="tab"
+                type="button"
+                aria-selected="${i === activeIndex ? 'true' : 'false'}"
+              >
+                <span class="tab-drug-name">${escapeHtml(r.genericName ?? r.drugName)}</span>
+                ${r.recommendation ? `<span class="tab-dot tab-dot--active"></span>` : `<span class="tab-dot tab-dot--muted"></span>`}
+              </button>
+            `).join('')}
+          </div>
         ` : ''}
 
+        <!-- Center Recommendation Card Content -->
+        ${renderCenterRecommendationContent(currentRec)}
+
+        <!-- Bottom Action Bar -->
+        <footer class="rec-action-footer">
+          <button class="secondary" data-action="back-to-genetics" type="button">
+            ${icon('arrow')} Back to Genetic Results
+          </button>
+          
+          <div class="rec-action-right">
+            ${currentRec && currentRec.found && currentRec.recommendation ? `
+              ${saveState[currentRec.drugName]?.saved
+                ? `<span class="rc-saved-badge">${icon('check')} Recommendation Saved</span>`
+                : `<button class="primary" data-action="save-recommendation" data-drug="${escapeAttr(currentRec.drugName)}" ${saveState[currentRec.drugName]?.loading ? 'disabled' : ''} type="button">
+                    ${saveState[currentRec.drugName]?.loading ? '<span class="spinner"></span> Saving...' : `${icon('check')} Save Recommendation`}
+                  </button>`
+              }
+            ` : ''}
+          </div>
+        </footer>
+
+      </main>
+    </div>
+  `
+}
+
+function renderCenterRecommendationContent(res: RecommendationResult | null): string {
+  if (!res) {
+    return `
+      <div class="rec-main-card rec-main-card--status-gray">
+        <div class="empty-prescription">
+          <span>${icon('flask')}</span>
+          <h3>No Recommendation Available</h3>
+          <p>Please enter diplotype results on Step 2 and click "Get Recommendation".</p>
+        </div>
       </div>
+    `
+  }
+
+  const drugTitle = escapeHtml(res.genericName ?? res.drugName)
+  const isFound = res.found
+  const rec = res.recommendation
+  const missing = res.missingGeneData ?? []
+  const phenotypes = res.phenotypes ?? {}
+  const phenotypeEntries = Object.entries(phenotypes)
+  const safetyList = res.drugSafetyStatus ?? []
+
+  // Determine status classification and styling
+  let statusBadgeText = 'No CPIC data available'
+  let statusClass = 'status-gray'
+  let statusIcon = icon('warning')
+
+  if (!isFound || !rec) {
+    statusBadgeText = missing.length ? 'Insufficient genetic info' : 'No CPIC data available'
+    statusClass = 'status-gray'
+    statusIcon = icon('warning')
+  } else {
+    // Has recommendation
+    const hasAlternate = safetyList.some(s => s.status === 'alternate_found')
+    const hasRisk = safetyList.some(s => s.status === 'no_alternative_documented')
+    const cpicTest = suggestedTests.find(t => t.drugName === res.genericName || t.drugName === res.drugName)
+    const cpicLevel = cpicTest?.cpicLevel
+
+    if (hasAlternate) {
+      statusBadgeText = 'Alternative recommended'
+      statusClass = 'status-blue'
+      statusIcon = icon('info')
+    } else if (hasRisk) {
+      statusBadgeText = 'Actionable PGx result'
+      statusClass = 'status-amber'
+      statusIcon = icon('warning')
+    } else if (cpicLevel === 'A' || cpicLevel === 'B') {
+      statusBadgeText = 'Actionable PGx result'
+      statusClass = 'status-green'
+      statusIcon = icon('check')
+    } else {
+      statusBadgeText = 'Guidance available'
+      statusClass = 'status-blue'
+      statusIcon = icon('check')
+    }
+  }
+
+  // Phenotype headline string e.g. "CYP2C19 · Poor Metabolizer"
+  const phenotypeHeadline = phenotypeEntries.length
+    ? phenotypeEntries.map(([gene, ph]) => `${gene} · ${ph.phenotypeName}`).join(' | ')
+    : 'Pharmacogenomic Recommendation'
+
+  return `
+    <div class="rec-main-card rec-main-card--${statusClass}">
+      <!-- Header: Drug Name + Status -->
+      <div class="rec-card-header">
+        <div class="rec-drug-header-info">
+          <span class="rec-drug-label">PRESCRIBED DRUG</span>
+          <h2 class="rec-drug-title">${drugTitle}</h2>
+          <span class="rec-gene-finding">${escapeHtml(phenotypeHeadline)}</span>
+        </div>
+        <div class="rec-status-badge ${statusClass}">
+          ${statusIcon}
+          <span>${escapeHtml(statusBadgeText)}</span>
+        </div>
+      </div>
+
+      <!-- Phenotype pill strip -->
+      ${phenotypeEntries.length ? `
+        <div class="rec-pheno-strip">
+          ${phenotypeEntries.map(([gene, ph]) => {
+            const dip = escapeHtml(diplotypeInputs[gene] ?? '—')
+            return `
+              <div class="rec-pheno-tag">
+                <span class="rec-pheno-gene">${escapeHtml(gene)}</span>
+                <code class="rec-pheno-dip">${dip}</code>
+                <span class="rec-pheno-name">${escapeHtml(ph.phenotypeName)}</span>
+              </div>
+            `
+          }).join('')}
+        </div>
+      ` : ''}
+
+      <!-- Primary Recommendation Box -->
+      <div class="rec-primary-box">
+        <div class="rec-primary-label">
+          ${icon('dna')}
+          <span>PRIMARY RECOMMENDATION</span>
+        </div>
+        ${rec ? `
+          <div class="rec-primary-text">
+            ${escapeHtml(rec.drugRecommendation)}
+          </div>
+        ` : `
+          <div class="rec-primary-text rec-primary-text--empty">
+            ${isFound
+              ? 'No applicable CPIC recommendation was returned for the available genetic information.'
+              : escapeHtml(res.reason ?? 'No CPIC pharmacogenomic recommendation available.')
+            }
+          </div>
+        `}
+      </div>
+
+      <!-- Missing diplotypes alert if applicable -->
+      ${!rec && missing.length ? `
+        <div class="rec-alert-box rec-alert-box--amber">
+          ${icon('warning')}
+          <div>
+            <strong>Missing Diplotype Data</strong>
+            <p>Additional diplotypes needed for a complete recommendation: ${missing.map(g => `<span class="gene-chip">${escapeHtml(g)}</span>`).join(' ')}</p>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Rationale Section -->
+      ${(rec?.comments || rec?.implications) ? `
+        <div class="rec-section-block">
+          <h3 class="rec-section-title">Why this recommendation?</h3>
+          <div class="rec-section-body">
+            ${rec.comments ? `<p>${escapeHtml(rec.comments)}</p>` : ''}
+            ${rec.implications ? `<p><strong>Clinical Implications:</strong> ${escapeHtml(String(rec.implications))}</p>` : ''}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Alternative Therapy Section -->
+      ${safetyList.length ? `
+        <div class="rec-section-block">
+          <h3 class="rec-section-title">Alternative Therapy & Safety Assessment</h3>
+          <div class="rec-alt-list">
+            ${safetyList.map(s => {
+              if (s.status === 'alternate_found' && s.alternativeDrugGeneric) {
+                return `
+                  <div class="rec-alt-card rec-alt-card--found">
+                    <div class="rec-alt-head">
+                      <span class="rec-alt-badge">${icon('check')} Recommended Alternative</span>
+                      <strong class="rec-alt-name">${escapeHtml(s.alternativeDrugGeneric)}</strong>
+                    </div>
+                    <div class="rec-alt-meta">
+                      <span>Gene: <strong>${escapeHtml(s.geneSymbol)}</strong> (${escapeHtml(s.phenotypeName)})</span>
+                    </div>
+                    ${s.rationale ? `<div class="rec-alt-rationale"><p>${escapeHtml(s.rationale)}</p></div>` : ''}
+                    ${s.guidelineTitle ? `<div class="rec-alt-guide"><small>Guideline: ${escapeHtml(s.guidelineTitle)}</small></div>` : ''}
+                  </div>
+                `
+              }
+              if (s.status === 'no_alternative_documented') {
+                return `
+                  <div class="rec-alt-card rec-alt-card--warning">
+                    <div class="rec-alt-head">
+                      <span class="rec-alt-badge warning">${icon('warning')} Risk Identified</span>
+                      <strong class="rec-alt-name">Use Caution / Consult Guidelines</strong>
+                    </div>
+                    <div class="rec-alt-meta">
+                      <span>Gene: <strong>${escapeHtml(s.geneSymbol)}</strong> (${escapeHtml(s.phenotypeName)})</span>
+                    </div>
+                    <p class="rec-alt-text">Specific alternative therapy is not documented in CPIC for this phenotype. Close clinical monitoring is advised.</p>
+                  </div>
+                `
+              }
+              return ''
+            }).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Guideline & Evidence Section -->
+      <div class="rec-section-block rec-section-block--evidence">
+        <h3 class="rec-section-title">Guideline & Evidence</h3>
+        <div class="rec-evidence-row">
+          <div class="rec-evidence-info">
+            <span class="rec-evidence-source">CPIC Guidelines</span>
+            <span class="rec-evidence-title">${escapeHtml(rec?.guidelineTitle ?? 'Clinical Pharmacogenetics Implementation Consortium')}</span>
+          </div>
+          ${rec?.guidelineTitle ? `<span class="rec-evidence-check">${icon('check')} Level A Evidence</span>` : ''}
+        </div>
+      </div>
+
     </div>
   `
 }
@@ -1314,133 +1622,7 @@ function renderGeneTestTable(): string {
     </div>`
 }
 
-function renderRecommendationBlocks(): string {
-  return recommendationResults.map(res => {
-    if (!res.found) {
-      return `
-        <div class="rc-card rc-card--gray">
-          <div class="rc-header">
-            <div class="rc-drug-icon rc-drug-icon--gray">${icon('warning')}</div>
-            <div>
-              <div class="rc-drug-name">${escapeHtml(res.drugName)}</div>
-              <div class="rc-drug-generic">No CPIC data available</div>
-            </div>
-            <span class="rc-status-badge rc-badge--gray">No CPIC data</span>
-          </div>
-          <div class="rc-footer">
-            <span class="rc-guideline">${escapeHtml(res.reason ?? 'No pharmacogenomic guideline found.')}</span>
-          </div>
-        </div>`
-    }
-
-    const missing = res.missingGeneData ?? []
-    const rec = res.recommendation
-    const phenotypes = res.phenotypes ?? {}
-    const ss = saveState[res.drugName]
-
-    // Determine color
-    const cpic = (rec ? (suggestedTests.find(t => t.drugName === res.genericName || t.drugName === res.drugName)?.cpicLevel ?? null) : null)
-    let color = 'blue'
-    if (!rec) color = 'amber'
-    else if (cpic === 'A' || cpic === 'B') color = 'green'
-    else if (cpic === 'C') color = 'amber'
-    else color = 'blue'
-    if (!res.found) color = 'gray'
-
-    const statusText = rec
-      ? (color === 'green' ? 'Actionable' : color === 'amber' ? 'Guidance available' : 'Recommendation found')
-      : 'Incomplete data'
-
-    const phenotypeEntries = Object.entries(phenotypes)
-
-    return `
-      <div class="rc-card rc-card--${color}">
-        <div class="rc-header">
-          <div class="rc-drug-icon rc-drug-icon--${color}">${icon('flask')}</div>
-          <div>
-            <div class="rc-drug-name">${escapeHtml(res.genericName ?? res.drugName)}</div>
-            <div class="rc-drug-generic">Generic · ${escapeHtml(res.drugName)}</div>
-          </div>
-          <span class="rc-status-badge rc-badge--${color}">${rec ? icon('check') : icon('warning')} ${statusText}</span>
-        </div>
-
-        ${phenotypeEntries.length ? `
-          <div class="rc-phenotype-strip">
-            ${phenotypeEntries.map(([gene, ph]) => {
-              const dip = escapeHtml(diplotypeInputs[gene] ?? '—')
-              return `<span class="rc-pheno-pill"><b class="rc-pheno-gene">${escapeHtml(gene)}</b><code class="rc-pheno-dip">${dip}</code><span class="rc-pheno-name">${escapeHtml(ph.phenotypeName)}</span></span>`
-            }).join('')}
-          </div>` : ''}
-
-        ${rec ? `<div class="rc-rec-box"><p>${escapeHtml(rec.drugRecommendation)}</p></div>` : ''}
-
-        ${!rec && missing.length ? `
-          <div class="rc-no-rec-box">
-            ${icon('warning')}
-            <div>Missing diplotypes for a full recommendation: ${missing.map(g => `<span class="gene-chip">${escapeHtml(g)}</span>`).join(' ')}</div>
-          </div>` : ''}
-
-        ${(res.drugSafetyStatus ?? []).length ? `
-          <div class="rc-safety-section">
-            <div class="rc-safety-label">Drug Safety Assessment</div>
-            ${(res.drugSafetyStatus ?? []).map(ss => {
-              if (ss.status === 'not_risky') {
-                return `<div class="rc-safety-row rc-safety--green">
-                  <span class="rc-safety-icon">${icon('check')}</span>
-                  <div class="rc-safety-body">
-                    <strong>No genetic concern</strong>
-                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                  </div>
-                  <span class="rc-safety-badge rc-safety-badge--green">Not risky</span>
-                </div>`
-              }
-              if (ss.status === 'alternate_found') {
-                return `<div class="rc-safety-row rc-safety--blue">
-                  <span class="rc-safety-icon">${icon('info')}</span>
-                  <div class="rc-safety-body">
-                    <strong>Consider alternate: <span class="rc-alt-drug">${escapeHtml(ss.alternativeDrugGeneric ?? '')}</span></strong>
-                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                    ${ss.rationale ? `<span class="rc-safety-rationale">${escapeHtml(ss.rationale.substring(0, 180))}${ss.rationale.length > 180 ? '…' : ''}</span>` : ''}
-                  </div>
-                  <span class="rc-safety-badge rc-safety-badge--blue">CPIC Guideline</span>
-                </div>`
-              }
-              if (ss.status === 'no_alternative_documented') {
-                return `<div class="rc-safety-row rc-safety--amber">
-                  <span class="rc-safety-icon">${icon('warning')}</span>
-                  <div class="rc-safety-body">
-                    <strong>Risky — no specific alternate documented</strong>
-                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                    <span class="rc-safety-rationale">Consult the CPIC guideline before dispensing.</span>
-                  </div>
-                  <span class="rc-safety-badge rc-safety-badge--amber">Review needed</span>
-                </div>`
-              }
-              // unknown
-              return `<div class="rc-safety-row rc-safety--gray">
-                <span class="rc-safety-icon">${icon('info')}</span>
-                <div class="rc-safety-body">
-                  <strong>No safety data available</strong>
-                  <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                </div>
-                <span class="rc-safety-badge rc-safety-badge--gray">Unknown</span>
-              </div>`
-            }).join('')}
-          </div>` : ''}
-
-        <div class="rc-footer">
-          <span class="rc-guideline">
-            ${rec?.guidelineTitle ? `${icon('check')} ${escapeHtml(rec.guidelineTitle)}` : ''}
-          </span>
-          ${rec ? (ss?.saved && ss.savedIds
-            ? `<div class="rc-saved-badge">${icon('check')} Saved <span class="rc-saved-ids">Record #${ss.savedIds.resultIds?.[0] ?? '?'}</span></div>`
-            : `<button class="primary rc-save-btn" data-action="save-recommendation" data-drug="${escapeAttr(res.drugName)}" ${ss?.loading ? 'disabled' : ''}>
-                ${ss?.loading ? '<span class="spinner"></span> Saving…' : `${icon('check')} Save to patient record`}
-              </button>`) : ''}
-        </div>
-      </div>`
-  }).join('')
-}
+// ── DOM sync helpers ───────────────────────────────────────────────────────────
 
 // ── DOM sync helpers ───────────────────────────────────────────────────────────
 function syncSearchSuggestions() {
@@ -1750,6 +1932,8 @@ async function getRecommendation() {
     )
     console.log('[RECOMMENDATIONS] All results received =', results)
     recommendationResults = results
+    selectedRecDrugIndex = 0
+    step = 3
   } catch (error) {
     console.error('[RECOMMENDATIONS] Error in getRecommendation =', error)
     recommendationError = error instanceof Error ? error.message : 'Could not fetch recommendations.'
@@ -1855,7 +2039,7 @@ function syncDrugField(target: HTMLInputElement | HTMLSelectElement) {
   const formEl = target.closest('.drug-form')
   if (formEl) {
     const statusEl = formEl.querySelector('.detail-status')
-    const helpEl = formEl.querySelector('.field-help')
+    const helpEl = formEl.querySelector<HTMLElement>('.field-help')
     const complete = isComplete(item)
     if (statusEl) {
       statusEl.className = `detail-status ${complete ? 'complete' : ''}`
@@ -2101,7 +2285,28 @@ app.addEventListener('click', event => {
   if (action === 'clear-all') { items = []; render(); return }
   if (action === 'submit-prescription') { void submitPrescription(); return }
   if (action === 'back-to-create') { step = 1; render(); return }
-  if (action === 'next-step' && submitted) { step = 3; render(); return }
+  if (action === 'next-step' && submitted) { step = 2; render(); return }
+  if (action === 'go-to-step') {
+    const sNum = parseInt(actionEl?.dataset.stepNum ?? '1', 10)
+    if (sNum === 1) { step = 1; render(); return }
+    if (sNum === 2 && (step >= 2 || submitted)) { step = 2; render(); return }
+    if (sNum === 3 && recommendationResults.length > 0) { step = 3; render(); return }
+  }
+  if (action === 'back-to-genetics') { step = 2; render(); return }
+  if (action === 'select-rec-tab') {
+    const idx = parseInt(actionEl?.dataset.index ?? '0', 10)
+    selectedRecDrugIndex = idx
+    render()
+    return
+  }
+  if (action === 'toggle-left-sec') {
+    const sec = actionEl?.dataset.sec
+    if (sec && sec in leftContextCollapsed) {
+      leftContextCollapsed[sec] = !leftContextCollapsed[sec]
+      render()
+    }
+    return
+  }
 
   if (action === 'new-prescription') {
     step = 1; submitted = false; items = []; submitError = ''; query = ''
