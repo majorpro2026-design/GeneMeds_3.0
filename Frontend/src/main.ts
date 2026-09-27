@@ -88,10 +88,19 @@ type HCPUser = {
   lastLoginAt: string | null
 }
 
+type Patient = {
+  patient_id: number
+  full_name: string
+  dob: string
+  sex: string
+}
+
 const DRUG_ENDPOINT = import.meta.env.VITE_DRUGS_API_URL ?? '/api/drugs'
 const PRESCRIPTION_ENDPOINT = import.meta.env.VITE_PRESCRIPTION_API_URL ?? '/api/prescriptions'
 const UPLOAD_EXTRACT_ENDPOINT = '/api/prescriptions/upload-extract'
 const GENE_RECOMMENDATION_ENDPOINT = '/api/gene-recommendation'
+const PATIENT_SEARCH_ENDPOINT = '/api/patients/search'
+const PATIENT_CREATE_ENDPOINT = '/api/patients'
 const FREQUENCIES = ['Once daily', 'Twice daily', 'Three times daily', 'Every 6 hours', 'As needed']
 const SUGGESTION_LIMIT = 6
 const CATALOG_LIMIT = 18
@@ -113,6 +122,16 @@ let authMode: 'signin' | 'register' = 'signin'
 let authLoading = false
 let authError = ''
 
+// Patient state
+let selectedPatient: Patient | null = null
+let patientSearchQuery = ''
+let patientSearchResults: Patient[] = []
+let patientSearchLoading = false
+let patientSearchError = ''
+let showCreatePatientModal = false
+let createPatientLoading = false
+let createPatientError = ''
+
 let drugs: Drug[] = []
 let loadingDrugs = true
 let loadError = ''
@@ -124,6 +143,7 @@ let submitting = false
 let submitError = ''
 let submitted = false
 let suggestedTests: SuggestedTest[] = []
+let savedPrescriptionId: number | string | null = null
 
 // Step 3 — gene entry
 let diplotypeInputs: Record<string, string> = {}
@@ -190,6 +210,116 @@ function escapeAttr(value: string) { return escapeHtml(value) }
 
 const isComplete = (item: PrescriptionDrug) => Boolean(item.dosage && item.frequency && item.duration)
 const allComplete = () => items.length > 0 && items.every(isComplete)
+
+function formatDob(dobStr: string): string {
+  if (!dobStr) return ''
+  const parts = dobStr.split('-')
+  if (parts.length !== 3) return dobStr
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const monthIdx = parseInt(parts[1], 10) - 1
+  return `${parseInt(parts[2], 10)} ${months[monthIdx] || ''} ${parts[0]}`
+}
+
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .map(n => n[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase() || 'P'
+}
+
+async function searchPatients(query: string) {
+  patientSearchQuery = query
+  const q = query.trim()
+  if (!q) {
+    patientSearchResults = []
+    patientSearchLoading = false
+    patientSearchError = ''
+    updatePatientResultsContainer()
+    return
+  }
+  patientSearchLoading = true
+  patientSearchError = ''
+  updatePatientResultsContainer()
+
+  try {
+    const res = await fetch(`${PATIENT_SEARCH_ENDPOINT}?q=${encodeURIComponent(q)}`, { credentials: 'include' })
+    if (res.status === 401) {
+      currentHCP = null
+      authError = 'Session expired. Please sign in again.'
+      render()
+      return
+    }
+    if (!res.ok) {
+      throw new Error(`Search failed (${res.status})`)
+    }
+    const data = (await res.json()) as Patient[]
+    patientSearchResults = data
+  } catch (err) {
+    patientSearchError = err instanceof Error ? err.message : 'Error searching patients'
+  } finally {
+    patientSearchLoading = false
+    updatePatientResultsContainer()
+  }
+}
+
+function updatePatientResultsContainer() {
+  const container = document.querySelector('#patient-results-container')
+  if (container) {
+    container.innerHTML = renderPatientSearchResultsHTML()
+  }
+}
+
+async function submitCreatePatient(fullName: string, dob: string, sex: string) {
+  console.log('[PATIENT MODAL] Create Patient submitted')
+  console.log('[PATIENT MODAL] payload =', { full_name: fullName, dob, sex })
+  if (!fullName || !dob || !sex) {
+    createPatientError = 'Please fill in all required patient fields.'
+    render()
+    return
+  }
+  createPatientLoading = true
+  createPatientError = ''
+  render()
+
+  try {
+    const res = await fetch(PATIENT_CREATE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ full_name: fullName, dob, sex }),
+    })
+    console.log('[PATIENT MODAL] API response status =', res.status)
+    if (res.status === 401) {
+      currentHCP = null
+      authError = 'Session expired. Please sign in again.'
+      render()
+      return
+    }
+    if (!res.ok) {
+      const errData = (await res.json().catch(() => ({}))) as { detail?: string }
+      throw new Error(errData.detail ?? 'Failed to create patient.')
+    }
+    const newPatient = (await res.json()) as Patient
+    console.log('[PATIENT MODAL] API response =', res.status)
+    console.log('[PATIENT MODAL] patient created =', newPatient)
+    // Automatically select the newly created patient
+    selectedPatient = newPatient
+    showCreatePatientModal = false
+    createPatientLoading = false
+    createPatientError = ''
+    patientSearchQuery = ''
+    patientSearchResults = []
+    render()
+  } catch (err) {
+    console.error('[PATIENT MODAL] Error creating patient:', err)
+    createPatientError = err instanceof Error ? err.message : 'Could not create patient.'
+    createPatientLoading = false
+    render()
+  }
+}
 
 function uniqueGenes(): string[] {
   const seen = new Set<string>()
@@ -607,11 +737,169 @@ function render() {
         ${step === 1 ? createStep() : step === 2 ? reviewStep() : resultsPage()}
       </div>
     </main>
+    ${renderCreatePatientModalHTML()}
   `
 
   syncSearchSuggestions()
   syncUploadState()
   syncLabFileLabel()
+}
+
+function patientSection() {
+  if (selectedPatient) {
+    return `
+      <section class="patient-card card">
+        <span class="patient-section-tag">SELECTED PATIENT</span>
+        <div class="patient-summary-content">
+          <div class="patient-avatar-circle">
+            ${escapeHtml(getInitials(selectedPatient.full_name))}
+          </div>
+          <div class="patient-details-body">
+            <div class="patient-name-line">
+              <h3>${escapeHtml(selectedPatient.full_name)}</h3>
+              <span class="patient-id-chip">P${String(selectedPatient.patient_id).padStart(5, '0')}</span>
+            </div>
+            <p class="patient-meta-line">
+              <span>DOB: ${formatDob(selectedPatient.dob)}</span>
+              <span class="dot-separator">•</span>
+              <span>Sex: ${escapeHtml(selectedPatient.sex)}</span>
+            </p>
+          </div>
+          <button class="secondary change-patient-btn" data-action="change-patient">Change Patient</button>
+        </div>
+      </section>
+    `
+  }
+
+  return `
+    <section class="patient-card card">
+      <div class="card-title">
+        <div>
+          <h2>Patient Selection</h2>
+          <p>Search and select an existing patient or create a new patient for this prescription.</p>
+        </div>
+        <button class="secondary btn-create-patient-trigger" data-action="open-create-patient-modal">
+          ${icon('plus')} Create New Patient
+        </button>
+      </div>
+
+      <div class="patient-search-wrap">
+        <label for="patient-search-input">Search Patient</label>
+        <div class="search-box">
+          ${icon('search')}
+          <input
+            id="patient-search-input"
+            autocomplete="off"
+            placeholder="Search patient by name or ID (e.g. Rahul, P00124)..."
+            value="${escapeAttr(patientSearchQuery)}"
+          />
+          ${patientSearchLoading ? '<span class="spinner"></span>' : ''}
+        </div>
+        <div class="patient-results-container" id="patient-results-container">
+          ${renderPatientSearchResultsHTML()}
+        </div>
+      </div>
+    </section>
+  `
+}
+
+function renderPatientSearchResultsHTML() {
+  if (!patientSearchQuery.trim()) {
+    return `
+      <div class="patient-hint-box">
+        Type a patient name or ID above to search existing database records, or click <strong>+ Create New Patient</strong>.
+      </div>
+    `
+  }
+
+  if (patientSearchLoading) {
+    return `<div class="patient-hint-box"><span class="spinner"></span> Searching patients...</div>`
+  }
+
+  if (patientSearchError) {
+    return `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(patientSearchError)}</div></div>`
+  }
+
+  if (patientSearchResults.length === 0) {
+    return `
+      <div class="patient-empty-results">
+        <p>No patients found matching "<strong>${escapeHtml(patientSearchQuery)}</strong>".</p>
+        <button class="primary" data-action="open-create-patient-modal">${icon('plus')} Create New Patient</button>
+      </div>
+    `
+  }
+
+  return `
+    <div class="patient-results-list">
+      ${patientSearchResults.map(p => `
+        <div class="patient-result-item" data-action="select-patient" data-patient-id="${p.patient_id}">
+          <div class="patient-result-avatar">${escapeHtml(getInitials(p.full_name))}</div>
+          <div class="patient-result-info">
+            <strong>${escapeHtml(p.full_name)}</strong>
+            <small>P${String(p.patient_id).padStart(5, '0')} · ${formatDob(p.dob)} · ${escapeHtml(p.sex)}</small>
+          </div>
+          <span class="patient-select-btn">${icon('check')} Select</span>
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
+function renderCreatePatientModalHTML() {
+  if (!showCreatePatientModal) return ''
+
+  const today = new Date().toISOString().split('T')[0]
+
+  return `
+    <div class="patient-modal-backdrop" data-action="close-modal-backdrop">
+      <div class="patient-modal-card">
+        <div class="patient-modal-header">
+          <div>
+            <h3>Create New Patient</h3>
+            <p>Enter basic demographics to create and select patient.</p>
+          </div>
+          <button type="button" class="modal-close-btn" data-action="close-create-patient-modal" title="Close modal">✕</button>
+        </div>
+        <form id="create-patient-form" onsubmit="return false">
+          ${createPatientError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(createPatientError)}</div></div>` : ''}
+
+          <div class="auth-form-group">
+            <label for="patient-full-name">Full Name <b>*</b></label>
+            <div class="auth-input-wrap">
+              <span class="input-icon">${icon('info')}</span>
+              <input type="text" id="patient-full-name" class="auth-input" placeholder="e.g. Rahul Sharma" required>
+            </div>
+          </div>
+
+          <div class="auth-form-group">
+            <label for="patient-dob">Date of Birth <b>*</b></label>
+            <div class="auth-input-wrap">
+              <span class="input-icon">${icon('doc')}</span>
+              <input type="date" id="patient-dob" class="auth-input" max="${today}" required>
+            </div>
+          </div>
+
+          <div class="auth-form-group">
+            <label for="patient-sex">Sex <b>*</b></label>
+            <div class="auth-input-wrap">
+              <select id="patient-sex" class="auth-input" required>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="patient-modal-footer">
+            <button type="button" class="secondary" data-action="close-create-patient-modal">Cancel</button>
+            <button type="submit" class="primary" id="btn-create-patient-submit" data-action="submit-create-patient" ${createPatientLoading ? 'disabled' : ''}>
+              ${createPatientLoading ? '<span class="spinner"></span> Creating...' : `Create & Select ${icon('arrow')}`}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `
 }
 
 function stepper() {
@@ -630,6 +918,7 @@ function createStep() {
   const catalogue = getCatalogueDrugs(query, CATALOG_LIMIT)
   const hasQuery = Boolean(query.trim())
   return `
+    ${patientSection()}
     <section class="card prescription-card">
       <div class="card-title">
         <div>
@@ -661,7 +950,7 @@ function createStep() {
           </div>
           <span class="medicine-count">${loadingDrugs ? 'Loading' : `${drugs.length} total`}</span>
         </div>
-        ${renderCatalogue(catalogue)}
+        <div class="catalogue-grid-wrap">${renderCatalogue(catalogue)}</div>
       </section>
 
       ${items.length ? `<div class="drug-list">${items.map((item, index) => drugForm(item, index)).join('')}</div>` : emptyState()}
@@ -1196,11 +1485,17 @@ function extractList(body: unknown): DrugApiItem[] {
 
 async function submitPrescription() {
   if (!allComplete() || submitting) return
+  if (!selectedPatient) {
+    submitError = 'Please search and select a patient before continuing.'
+    render()
+    return
+  }
   submitting = true; submitError = ''; render()
 
   const payload = {
     prescriptionId: `draft-${Date.now()}`,
     prescribedAt: new Date().toISOString(),
+    patientId: selectedPatient.patient_id,
     prescribedDrugs: items.map(item => ({
       drugId: item.id, drugName: item.name, strength: item.strength,
       generics: item.generics, selectedGeneric: item.selectedGeneric,
@@ -1222,7 +1517,7 @@ async function submitPrescription() {
       return
     }
     if (!response.ok) throw new Error(`Prescription upload failed with status ${response.status}`)
-    const body = (await response.json()) as { suggestedTests?: unknown }
+    const body = (await response.json()) as { suggestedTests?: unknown; prescription_id?: number | string }
     suggestedTests = extractSuggestedTests(body.suggestedTests)
     submitted = true
     step = 2
@@ -1321,7 +1616,12 @@ async function getRecommendation() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ drugName, diplotypes }),
+            body: JSON.stringify({
+              drugName,
+              diplotypes,
+              patientId: selectedPatient?.patient_id ?? null,
+              enteredByDoctorId: currentHCP?.id ?? null,
+            }),
           })
           if (response.status === 401) {
             currentHCP = null
@@ -1352,6 +1652,12 @@ async function saveRecommendation(drugName: string) {
   const existing = recommendationResults.find(r => r.drugName === drugName)
   if (!existing?.found || !existing.recommendation) return
 
+  if (!selectedPatient) {
+    saveState[drugName] = { loading: false, saved: false, error: 'Please select a patient first.', savedIds: null }
+    render()
+    return
+  }
+
   saveState[drugName] = { loading: true, saved: false, error: '', savedIds: null }; render()
 
   const diplotypes = genesForDrug(drugName)
@@ -1359,11 +1665,52 @@ async function saveRecommendation(drugName: string) {
     .map(g => ({ geneSymbol: g, diplotypeName: diplotypeInputs[g].trim() }))
 
   try {
+    // 1. Ensure prescription header & items are transactionally persisted to database if not already saved
+    if (!savedPrescriptionId) {
+      console.log('[PRESCRIPTION SAVE] sending final prescription')
+      console.log('[PRESCRIPTION SAVE] patient_id =', selectedPatient.patient_id)
+      console.log('[PRESCRIPTION SAVE] persist = true')
+      console.log('[PRESCRIPTION SAVE] items =', items)
+
+      const rxPayload = {
+        patientId: selectedPatient.patient_id,
+        persist: true,
+        prescribedDrugs: items.map(item => ({
+          drugId: item.id, drugName: item.name, strength: item.strength,
+          generics: item.generics, selectedGeneric: item.selectedGeneric,
+          dosage: item.dosage, frequency: item.frequency,
+          durationDays: Number(item.duration), note: item.note,
+        })),
+      }
+      const rxRes = await fetch(PRESCRIPTION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(rxPayload),
+      })
+      if (rxRes.ok) {
+        const rxBody = (await rxRes.json().catch(() => ({}))) as { prescription_id?: number | string }
+        console.log('[PRESCRIPTION SAVE] response prescription_id =', rxBody.prescription_id)
+        if (rxBody.prescription_id) {
+          savedPrescriptionId = rxBody.prescription_id
+        }
+      } else {
+        console.error('[PRESCRIPTION SAVE] POST /api/prescriptions failed status =', rxRes.status)
+      }
+    }
+
+    // 2. Persist PGx test result and risk assessment audit log
     const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ drugName, diplotypes, patientId: 1, enteredByDoctorId: 1, persist: true }),
+      body: JSON.stringify({
+        drugName,
+        diplotypes,
+        patientId: selectedPatient.patient_id,
+        enteredByDoctorId: currentHCP?.id ?? null,
+        persist: true,
+      }),
     })
     if (response.status === 401) {
       currentHCP = null
@@ -1391,16 +1738,34 @@ function syncDrugField(target: HTMLInputElement | HTMLSelectElement) {
   const field = target.dataset.field as keyof Pick<PrescriptionDrug, 'dosage' | 'frequency' | 'duration' | 'note'> | undefined
   if (!item || !field) return
 
-  const ss = target instanceof HTMLInputElement ? target.selectionStart : null
-  const se = target instanceof HTMLInputElement ? target.selectionEnd : null
   item[field] = target.value
-  render()
 
-  const rep = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field]')]
-    .find(el => el.dataset.id === id && el.dataset.field === field)
-  if (!rep) return
-  rep.focus()
-  if (rep instanceof HTMLInputElement && ss !== null && se !== null) rep.setSelectionRange(ss, se)
+  // Update specific drug form's completion badge & hint without full page re-render
+  const formEl = target.closest('.drug-form')
+  if (formEl) {
+    const statusEl = formEl.querySelector('.detail-status')
+    const helpEl = formEl.querySelector('.field-help')
+    const complete = isComplete(item)
+    if (statusEl) {
+      statusEl.className = `detail-status ${complete ? 'complete' : ''}`
+      statusEl.innerHTML = complete ? `${icon('check')} Complete` : 'Details needed'
+    }
+    if (helpEl) {
+      helpEl.style.display = complete ? 'none' : 'block'
+    }
+  }
+
+  // Update completion note & submit button state live
+  const completionNote = document.querySelector('.completion-note')
+  if (completionNote) {
+    completionNote.textContent = allComplete()
+      ? 'All treatment details are complete.'
+      : items.length
+      ? 'Complete dosage, frequency, and duration for each medicine.'
+      : 'Add at least one medicine to continue.'
+  }
+
+  syncUploadState()
 }
 
 // ── Event listeners ────────────────────────────────────────────────────────────
@@ -1408,8 +1773,21 @@ app.addEventListener('input', event => {
   const target = event.target as HTMLInputElement | HTMLSelectElement | null
   if (!target) return
 
+  if (target.id === 'patient-search-input') {
+    patientSearchQuery = target.value
+    void searchPatients(patientSearchQuery)
+    return
+  }
+
   if (target.id === 'drug-search') {
-    query = target.value; syncSearchSuggestions(); return
+    query = target.value
+    syncSearchSuggestions()
+    const gridWrap = document.querySelector('.catalogue-grid-wrap')
+    if (gridWrap) {
+      const catalogue = getCatalogueDrugs(query, CATALOG_LIMIT)
+      gridWrap.innerHTML = renderCatalogue(catalogue)
+    }
+    return
   }
 
   if (target.matches('[data-action="diplotype-input"]')) {
@@ -1454,6 +1832,20 @@ app.addEventListener('change', event => {
   }
 })
 
+app.addEventListener('submit', event => {
+  const target = event.target as HTMLFormElement | null
+  if (target?.id === 'create-patient-form') {
+    event.preventDefault()
+    const fnEl = document.querySelector<HTMLInputElement>('#patient-full-name')
+    const dobEl = document.querySelector<HTMLInputElement>('#patient-dob')
+    const sexEl = document.querySelector<HTMLSelectElement>('#patient-sex')
+    const fn = (fnEl?.value ?? '').trim()
+    const dob = (dobEl?.value ?? '').trim()
+    const sex = (sexEl?.value ?? '').trim()
+    void submitCreatePatient(fn, dob, sex)
+  }
+})
+
 app.addEventListener('focusin', event => {
   const target = event.target as HTMLElement | null
   if (target?.id !== 'drug-search') return
@@ -1491,6 +1883,67 @@ app.addEventListener('click', event => {
   // inputs/selects that are already in the prescription list.
   const id = actionEl?.dataset.id ?? actionEl?.closest<HTMLElement>('[data-id]')?.dataset.id
 
+  if (action === 'open-create-patient-modal') {
+    console.log('[PATIENT MODAL] Add New Patient clicked')
+    showCreatePatientModal = true
+    createPatientError = ''
+    render()
+    console.log('[PATIENT MODAL] modal opened')
+    return
+  }
+
+  if (action === 'close-modal-backdrop') {
+    if (target === actionEl) {
+      console.log('[PATIENT MODAL] backdrop clicked -> closing modal')
+      showCreatePatientModal = false
+      createPatientError = ''
+      render()
+    }
+    return
+  }
+
+  if (action === 'close-create-patient-modal') {
+    console.log('[PATIENT MODAL] close / cancel clicked -> closing modal')
+    showCreatePatientModal = false
+    createPatientError = ''
+    render()
+    return
+  }
+
+  if (action === 'submit-create-patient') {
+    const fnEl = document.querySelector<HTMLInputElement>('#patient-full-name')
+    const dobEl = document.querySelector<HTMLInputElement>('#patient-dob')
+    const sexEl = document.querySelector<HTMLSelectElement>('#patient-sex')
+    const fn = (fnEl?.value ?? '').trim()
+    const dob = (dobEl?.value ?? '').trim()
+    const sex = (sexEl?.value ?? '').trim()
+    void submitCreatePatient(fn, dob, sex)
+    return
+  }
+
+  if (action === 'select-patient') {
+    const patientIdStr = actionEl?.dataset.patientId
+    if (patientIdStr) {
+      const pId = parseInt(patientIdStr, 10)
+      const match = patientSearchResults.find(p => p.patient_id === pId)
+      if (match) {
+        selectedPatient = match
+        patientSearchQuery = ''
+        patientSearchResults = []
+        render()
+      }
+    }
+    return
+  }
+
+  if (action === 'change-patient') {
+    selectedPatient = null
+    patientSearchQuery = ''
+    patientSearchResults = []
+    render()
+    return
+  }
+
   if (action === 'set-auth-mode') {
     const mode = actionEl?.dataset.mode as 'signin' | 'register' | undefined
     if (mode && mode !== authMode) {
@@ -1503,7 +1956,10 @@ app.addEventListener('click', event => {
 
   if (action === 'toggle-theme') {
     applyTheme(currentTheme === 'dark' ? 'light' : 'dark')
-    render()
+    document.querySelectorAll<HTMLButtonElement>('.theme-toggle-btn').forEach(btn => {
+      btn.title = `Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme`
+      btn.innerHTML = currentTheme === 'dark' ? icon('sun') : icon('moon')
+    })
     return
   }
 
@@ -1534,7 +1990,7 @@ app.addEventListener('click', event => {
     suggestedTests = []; diplotypeInputs = {}; labReportFile = null
     labExtractLoading = false; labExtractError = ''; ocrExtractedLines = []
     recommendationLoading = false; recommendationError = ''
-    recommendationResults = []; saveState = {}
+    recommendationResults = []; saveState = {}; savedPrescriptionId = null
     render(); return
   }
 
