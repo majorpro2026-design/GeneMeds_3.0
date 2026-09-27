@@ -1,7 +1,9 @@
 import './style.css'
 import './catalogue.css'
 import './chat.css'
+import './landing.css'
 import { mountChatWidget } from './chat'
+import { initTheme, renderLandingPage, toggleTheme } from './landing'
 
 type Drug = {
   id: string
@@ -126,11 +128,88 @@ let ocrExtractedLines: string[] = []
 let recommendationLoading = false
 let recommendationError = ''
 let recommendationResults: RecommendationResult[] = []
+let landingModalKey: string | null = null
+
+const developerProfiles: Record<string, {
+  tag: string
+  name: string
+  initials: string
+  details: string[]
+}> = {
+  amod: {
+    tag: 'Project contributor',
+    name: 'Amod Pathak',
+    initials: 'AP',
+    details: ['Name: Amod Pathak', 'Role: Not provided', 'Contact: Not provided'],
+  },
+  'aditya-yelne': {
+    tag: 'Project contributor',
+    name: 'Aditya Yelne',
+    initials: 'AY',
+    details: ['Name: Aditya Yelne', 'Role: Not provided', 'Contact: Not provided'],
+  },
+  payal: {
+    tag: 'Project contributor',
+    name: 'Payal Mohanapure',
+    initials: 'PM',
+    details: ['Name: Payal Mohanapure', 'Role: Not provided', 'Contact: Not provided'],
+  },
+  sharvari: {
+    tag: 'Project contributor',
+    name: 'Sharvari Ghotekar',
+    initials: 'SG',
+    details: ['Name: Sharvari Ghotekar', 'Role: Not provided', 'Contact: Not provided'],
+  },
+  komal: {
+    tag: 'Project contributor',
+    name: 'Komal Gehani',
+    initials: 'KG',
+    details: ['Name: Komal Gehani', 'Role: Not provided', 'Contact: Not provided'],
+  },
+  'aditya-balki': {
+    tag: 'Project contributor',
+    name: 'Aditya Balki',
+    initials: 'AB',
+    details: ['Name: Aditya Balki', 'Role: Not provided', 'Contact: Not provided'],
+  },
+}
 
 // Step 3 — save per drug
 let saveState: Record<string, { loading: boolean; saved: boolean; error: string; savedIds: RecommendationResult['savedRecordIds'] | null }> = {}
 
 const app = document.querySelector<HTMLDivElement>('#app')!
+
+// ── Routing ────────────────────────────────────────────────────────────────────
+type AppRoute = 'landing' | 'login' | 'app'
+
+function getRoute(): AppRoute {
+  const hash = window.location.hash.toLowerCase()
+  const path = window.location.pathname.toLowerCase()
+
+  if (hash === '#/login' || hash === '#login' || path === '/login') {
+    return 'login'
+  }
+  if (hash === '#/app' || hash === '#app' || path === '/app') {
+    return 'app'
+  }
+  return 'landing'
+}
+
+function navigate(target: string) {
+  let normalized = target
+  if (target === 'login' || target === '/login' || target === '#/login') {
+    normalized = '/login'
+  } else if (target === 'app' || target === '/app' || target === '#/app') {
+    normalized = '/app'
+  } else {
+    normalized = '/'
+  }
+
+  if (window.location.pathname !== normalized) {
+    window.history.pushState(null, '', normalized)
+  }
+  render()
+}
 
 // ── Icons ──────────────────────────────────────────────────────────────────────
 const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' | 'refresh' | 'warning' | 'upload' | 'dna' | 'flask' | 'info') => {
@@ -262,7 +341,7 @@ async function submitSignIn() {
     const data = (await res.json()) as { hcp: HCPUser }
     currentHCP = data.hcp
     updateAuthErrorBanner('')
-    render()
+    navigate('/app')
     void loadDrugs()
   } catch (err) {
     updateAuthErrorBanner(err instanceof Error ? err.message : 'Login failed.')
@@ -321,7 +400,7 @@ async function submitRegister() {
     const data = (await res.json()) as { hcp: HCPUser }
     currentHCP = data.hcp
     updateAuthErrorBanner('')
-    render()
+    navigate('/app')
     void loadDrugs()
   } catch (err) {
     updateAuthErrorBanner(err instanceof Error ? err.message : 'Registration failed.')
@@ -338,7 +417,7 @@ async function logoutHCP() {
     currentHCP = null
     authError = ''
     sessionCheckDone = false
-    render()
+    navigate('/login')
   }
 }
 
@@ -421,12 +500,48 @@ function renderRegisterForm() {
 }
 
 // ── Main render ────────────────────────────────────────────────────────────────
+function renderDeveloperProfile(key: string | null) {
+  const modal = document.querySelector<HTMLElement>('#developer-profile-modal')
+  const tag = document.querySelector<HTMLElement>('#developer-profile-tag')
+  const name = document.querySelector<HTMLElement>('#developer-profile-name')
+  const details = document.querySelector<HTMLElement>('#developer-profile-details')
+  const avatar = document.querySelector<HTMLElement>('#developer-profile-avatar')
+
+  if (!modal || !tag || !name || !details || !avatar) return
+
+  if (!key || !developerProfiles[key]) {
+    modal.hidden = true
+    modal.setAttribute('aria-hidden', 'true')
+    landingModalKey = null
+    return
+  }
+
+  const profile = developerProfiles[key]
+  tag.textContent = profile.tag
+  name.textContent = profile.name
+  avatar.textContent = profile.initials
+  details.innerHTML = profile.details.map(item => `<div class="landing-modal-list-item">${item}</div>`).join('')
+
+  modal.hidden = false
+  modal.setAttribute('aria-hidden', 'false')
+  landingModalKey = key
+}
+
+function openDeveloperProfile(key: string) {
+  if (!developerProfiles[key]) return
+  renderDeveloperProfile(key)
+}
+
+function closeLandingModal() {
+  renderDeveloperProfile(null)
+}
+
 function render() {
   if (authChecking) {
     app.innerHTML = `
       <main>
         <header>
-          <a class="brand" href="#" aria-label="GeneMeds home">
+          <a class="brand" href="/" data-nav="/" aria-label="GeneMeds home">
             <span class="brand-mark">${geneLogo}</span>
             <span>Gene<span>Meds</span></span>
           </a>
@@ -440,15 +555,29 @@ function render() {
     return
   }
 
+  const route = getRoute()
+
+  if (route === 'landing') {
+    app.innerHTML = renderLandingPage({ currentHCP, geneLogo })
+    renderDeveloperProfile(landingModalKey)
+    return
+  }
+
   if (!currentHCP) {
     app.innerHTML = `
       <main>
         <header>
-          <a class="brand" href="#" aria-label="GeneMeds home">
+          <a class="brand" href="/" data-nav="/" aria-label="GeneMeds home">
             <span class="brand-mark">${geneLogo}</span>
             <span>Gene<span>Meds</span></span>
           </a>
         </header>
+
+        <div class="back-to-home-bar">
+          <a href="/" data-nav="/" class="back-to-home-link" aria-label="Back to home">
+            ${icon('arrow')} <span>Back to Home</span>
+          </a>
+        </div>
 
         <div class="auth-wrapper">
           <div class="auth-card">
@@ -489,7 +618,7 @@ function render() {
   app.innerHTML = `
     <main class="${step === 3 ? 'main-wide' : ''}">
       <header>
-        <a class="brand" href="#" aria-label="GeneMeds home">
+        <a class="brand" href="/" data-nav="/" aria-label="GeneMeds home">
           <span class="brand-mark">${geneLogo}</span>
           <span>Gene<span>Meds</span></span>
         </a>
@@ -1371,6 +1500,12 @@ app.addEventListener('focusin', event => {
   searchFocused = true; syncSearchSuggestions()
 })
 
+window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && landingModalKey) {
+    closeLandingModal()
+  }
+})
+
 app.addEventListener('focusout', event => {
   const target = event.target as HTMLElement | null
   if (target?.id !== 'drug-search') return
@@ -1395,12 +1530,49 @@ app.addEventListener('pointerdown', event => {
 
 app.addEventListener('click', event => {
   const target = event.target as HTMLElement | null
+
+  // Route navigation
+  const navEl = target?.closest<HTMLElement>('[data-nav]')
+  if (navEl && navEl.dataset.nav) {
+    event.preventDefault()
+    navigate(navEl.dataset.nav)
+    return
+  }
+
+  const anchor = target?.closest<HTMLAnchorElement>('a[href^="/"]')
+  if (anchor && !anchor.target && !anchor.hasAttribute('download')) {
+    const href = anchor.getAttribute('href')
+    if (href && (href === '/' || href === '/login' || href === '/app')) {
+      event.preventDefault()
+      navigate(href)
+      return
+    }
+  }
+
   const actionEl = target?.closest<HTMLElement>('[data-action]')
   const action = actionEl?.dataset.action
   // Resolve id only from the action element itself, not by walking up the whole tree.
   // Walking up with closest('[data-id]') would accidentally match data-id on drug form
   // inputs/selects that are already in the prescription list.
   const id = actionEl?.dataset.id ?? actionEl?.closest<HTMLElement>('[data-id]')?.dataset.id
+
+  if (action === 'go-login') { navigate('/login'); return }
+  if (action === 'go-app') { navigate('/app'); return }
+  if (action === 'go-home') { navigate('/'); return }
+  if (action === 'toggle-theme') { toggleTheme(); return }
+  if (action === 'open-developer-profile') {
+    const developerKey = actionEl?.dataset.developer
+    if (developerKey) openDeveloperProfile(developerKey)
+    return
+  }
+  if (action === 'close-developer-profile') { closeLandingModal(); return }
+  if (action === 'toggle-mobile-menu') {
+    const drawer = document.querySelector<HTMLElement>('#landing-mobile-drawer')
+    if (drawer) {
+      drawer.style.display = drawer.style.display === 'none' ? 'flex' : 'none'
+    }
+    return
+  }
 
   if (action === 'set-auth-mode') {
     const mode = actionEl?.dataset.mode as 'signin' | 'register' | undefined
@@ -1454,6 +1626,11 @@ app.addEventListener('click', event => {
   }
 })
 
+window.addEventListener('popstate', () => {
+  render()
+})
+
+initTheme()
 void checkAuthSession()
 mountChatWidget()
 
