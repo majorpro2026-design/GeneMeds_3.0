@@ -1,0 +1,439 @@
+[
+  {
+    "case_id": "CASE-01",
+    "drug": "atomoxetine",
+    "input_dips": [
+      {
+        "geneSymbol": "CYP2D6",
+        "diplotypeName": "*4/*4"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "atomoxetine",
+    "relevantGenes": [
+      "CYP2D6"
+    ],
+    "phenotypes": {
+      "CYP2D6": {
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": "0.0",
+        "description": "An individual carrying two no function alleles"
+      }
+    },
+    "missingGeneData": [],
+    "has_recommendation": true,
+    "recommendation_preview": "Initiate with a dose of 40 mg/day and if no clinical response and in the absence of adverse events a",
+    "guidelineTitle": "CYP2D6 and Atomoxetine",
+    "drugSafetyStatus": [
+      {
+        "geneSymbol": "CYP2D6",
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": "0.0",
+        "status": "not_risky",
+        "alternativeDrugGeneric": null,
+        "rationale": null,
+        "confidenceLevel": "not_risky",
+        "guidelineTitle": "CYP2D6 and Atomoxetine",
+        "requiresClinicianReview": false
+      }
+    ]
+  },
+  {
+    "case_id": "CASE-02",
+    "drug": "codeine",
+    "input_dips": [
+      {
+        "geneSymbol": "CYP2D6",
+        "diplotypeName": "*4/*4"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "codeine",
+    "relevantGenes": [
+      "CYP2D6"
+    ],
+    "phenotypes": {
+      "CYP2D6": {
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": "0.0",
+        "description": "An individual carrying two no function alleles"
+      }
+    },
+    "missingGeneData": [],
+    "has_recommendation": true,
+    "recommendation_preview": "Avoid codeine use because of possibility of diminished analgesia. If opioid use is warranted, consid",
+    "guidelineTitle": "CYP2D6, OPRM1, COMT, and Opioids",
+    "drugSafetyStatus": [
+      {
+        "geneSymbol": "CYP2D6",
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": "0.0",
+        "status": "not_risky",
+        "alternativeDrugGeneric": null,
+        "rationale": null,
+        "confidenceLevel": "not_risky",
+        "guidelineTitle": "CYP2D6, OPRM1, COMT, and Opioids",
+        "requiresClinicianReview": false
+      }
+    ]
+  },
+  {
+    "case_id": "CASE-03",
+    "drug": "clopidogrel",
+    "input_dips": [
+      {
+        "geneSymbol": "CYP2C19",
+        "diplotypeName": "*2/*2"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "clopidogrel",
+    "relevantGenes": [
+      "CYP2C19"
+    ],
+    "phenotypes": {
+      "CYP2C19": {
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": null,
+        "description": "An individual carrying two no function alleles"
+      }
+    },
+    "missingGeneData": [],
+    "has_recommendation": true,
+    "recommendation_preview": "Avoid clopidogrel if possible. Use prasugrel or ticagrelor at standard dose if no contraindication.",
+    "guidelineTitle": "CYP2C19 and Clopidogrel",
+    "drugSafetyStatus": [
+      {
+        "geneSymbol": "CYP2C19",
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": null,
+        "status": "no_alternative_documented",
+        "alternativeDrugGeneric": null,
+        "rationale": "Confirmed risky per CPIC phenotype data, but CPIC does not name a specific alternate drug for this combination.",
+        "confidenceLevel": "no_alternative_documented",
+        "guidelineTitle": "CYP2C19 and Clopidogrel",
+        "requiresClinicianReview": false
+      }
+    ]
+  },
+  {
+    "case_id": "CASE-04",
+    "drug": "abacavir",
+    "input_dips": [
+      {
+        "geneSymbol": "HLA-B",
+        "diplotypeName": "*57:01 positive"
+      }
+    ],
+    "found": false,
+    "reason": "No diplotype data available for any gene associated with abacavir",
+    "genericName": "abacavir",
+    "relevantGenes": null,
+    "phenotypes": null,
+    "missingGeneData": null,
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": null
+  },
+  {
+    "case_id": "CASE-05",
+    "drug": "allopurinol",
+    "input_dips": [
+      {
+        "geneSymbol": "HLA-B",
+        "diplotypeName": "*58:01 positive"
+      }
+    ],
+    "found": false,
+    "reason": "No diplotype data available for any gene associated with allopurinol",
+    "genericName": "allopurinol",
+    "relevantGenes": null,
+    "phenotypes": null,
+    "missingGeneData": null,
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": null
+  },
+  {
+    "case_id": "CASE-06",
+    "drug": "capecitabine",
+    "input_dips": [
+      {
+        "geneSymbol": "DPYD",
+        "diplotypeName": "*2A/*2A"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "capecitabine",
+    "relevantGenes": [
+      "DPYD"
+    ],
+    "phenotypes": {},
+    "missingGeneData": [
+      "DPYD"
+    ],
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": []
+  },
+  {
+    "case_id": "CASE-07",
+    "drug": "mercaptopurine",
+    "input_dips": [
+      {
+        "geneSymbol": "TPMT",
+        "diplotypeName": "*3A/*3A"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "mercaptopurine",
+    "relevantGenes": [
+      "NUDT15",
+      "TPMT"
+    ],
+    "phenotypes": {
+      "TPMT": {
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": null,
+        "description": "An individual carrying two no function alleles"
+      }
+    },
+    "missingGeneData": [
+      "NUDT15"
+    ],
+    "has_recommendation": true,
+    "recommendation_preview": "For malignancy: initiate therapy with drastically reduced starting doses. Reduce starting dose by 10",
+    "guidelineTitle": "TPMT, NUDT15 and Thiopurines",
+    "drugSafetyStatus": [
+      {
+        "geneSymbol": "TPMT",
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": null,
+        "status": "no_alternative_documented",
+        "alternativeDrugGeneric": null,
+        "rationale": "Confirmed risky per CPIC phenotype data, but CPIC does not name a specific alternate drug for this combination.",
+        "confidenceLevel": "no_alternative_documented",
+        "guidelineTitle": "TPMT, NUDT15 and Thiopurines",
+        "requiresClinicianReview": false
+      }
+    ]
+  },
+  {
+    "case_id": "CASE-08",
+    "drug": "atorvastatin",
+    "input_dips": [
+      {
+        "geneSymbol": "SLCO1B1",
+        "diplotypeName": "*5/*5"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "atorvastatin",
+    "relevantGenes": [
+      "CYP3A5",
+      "SLCO1B1"
+    ],
+    "phenotypes": {
+      "SLCO1B1": {
+        "phenotypeName": "Poor Function",
+        "activityScore": null,
+        "description": "An individual carrying two no function alleles"
+      }
+    },
+    "missingGeneData": [
+      "CYP3A5"
+    ],
+    "has_recommendation": true,
+    "recommendation_preview": "Prescribe \u226420mg as a starting dose and adjust doses of atorvastatin based on disease-specific guidel",
+    "guidelineTitle": "SLCO1B1, ABCG2, CYP2C9, and Statins",
+    "drugSafetyStatus": [
+      {
+        "geneSymbol": "SLCO1B1",
+        "phenotypeName": "Poor Function",
+        "activityScore": null,
+        "status": "not_risky",
+        "alternativeDrugGeneric": null,
+        "rationale": null,
+        "confidenceLevel": "not_risky",
+        "guidelineTitle": "SLCO1B1, ABCG2, CYP2C9, and Statins",
+        "requiresClinicianReview": false
+      }
+    ]
+  },
+  {
+    "case_id": "CASE-09",
+    "drug": "atazanavir",
+    "input_dips": [
+      {
+        "geneSymbol": "UGT1A1",
+        "diplotypeName": "*28/*28"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "atazanavir",
+    "relevantGenes": [
+      "UGT1A1"
+    ],
+    "phenotypes": {
+      "UGT1A1": {
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": null,
+        "description": "An individual carrying two decreased function alleles"
+      }
+    },
+    "missingGeneData": [],
+    "has_recommendation": true,
+    "recommendation_preview": "Consider an alternative agent particularly where jaundice would be of concern to the patient. If ata",
+    "guidelineTitle": "UGT1A1 and Atazanavir",
+    "drugSafetyStatus": [
+      {
+        "geneSymbol": "UGT1A1",
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": null,
+        "status": "no_alternative_documented",
+        "alternativeDrugGeneric": null,
+        "rationale": "Confirmed risky per CPIC phenotype data, but CPIC does not name a specific alternate drug for this combination.",
+        "confidenceLevel": "no_alternative_documented",
+        "guidelineTitle": "UGT1A1 and Atazanavir",
+        "requiresClinicianReview": false
+      }
+    ]
+  },
+  {
+    "case_id": "CASE-10",
+    "drug": "warfarin",
+    "input_dips": [
+      {
+        "geneSymbol": "CYP2C9",
+        "diplotypeName": "*3/*3"
+      },
+      {
+        "geneSymbol": "VKORC1",
+        "diplotypeName": "-1639G>A"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "warfarin",
+    "relevantGenes": [
+      "CYP2C9"
+    ],
+    "phenotypes": {
+      "CYP2C9": {
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": "0.0",
+        "description": "An individual carrying two no function alleles"
+      }
+    },
+    "missingGeneData": [],
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": [
+      {
+        "geneSymbol": "CYP2C9",
+        "phenotypeName": "Poor Metabolizer",
+        "activityScore": "0.0",
+        "status": "unknown",
+        "alternativeDrugGeneric": null,
+        "rationale": "No data available for this combination.",
+        "confidenceLevel": null,
+        "guidelineTitle": null,
+        "requiresClinicianReview": false
+      }
+    ]
+  },
+  {
+    "case_id": "CASE-11-UNKNOWN-DRUG",
+    "drug": "nonexistentmedication999",
+    "input_dips": [
+      {
+        "geneSymbol": "CYP2D6",
+        "diplotypeName": "*4/*4"
+      }
+    ],
+    "found": false,
+    "reason": "Unknown drug: nonexistentmedication999",
+    "genericName": null,
+    "relevantGenes": null,
+    "phenotypes": null,
+    "missingGeneData": null,
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": null
+  },
+  {
+    "case_id": "CASE-12-UNKNOWN-DIPLOTYPE",
+    "drug": "codeine",
+    "input_dips": [
+      {
+        "geneSymbol": "CYP2D6",
+        "diplotypeName": "*999/*999"
+      }
+    ],
+    "found": true,
+    "reason": null,
+    "genericName": "codeine",
+    "relevantGenes": [
+      "CYP2D6"
+    ],
+    "phenotypes": {},
+    "missingGeneData": [
+      "CYP2D6"
+    ],
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": []
+  },
+  {
+    "case_id": "CASE-13-MISSING-GENETIC-DATA",
+    "drug": "codeine",
+    "input_dips": [],
+    "found": true,
+    "reason": null,
+    "genericName": "codeine",
+    "relevantGenes": [
+      "CYP2D6"
+    ],
+    "phenotypes": {},
+    "missingGeneData": [
+      "CYP2D6"
+    ],
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": []
+  },
+  {
+    "case_id": "CASE-14-DRUG-NO-PGX-PAIR",
+    "drug": "paracetamol",
+    "input_dips": [
+      {
+        "geneSymbol": "CYP2D6",
+        "diplotypeName": "*1/*1"
+      }
+    ],
+    "found": false,
+    "reason": "Unknown drug: paracetamol",
+    "genericName": null,
+    "relevantGenes": null,
+    "phenotypes": null,
+    "missingGeneData": null,
+    "has_recommendation": false,
+    "recommendation_preview": null,
+    "guidelineTitle": null,
+    "drugSafetyStatus": null
+  }
+]
