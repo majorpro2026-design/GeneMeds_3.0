@@ -1,7 +1,7 @@
 import './style.css'
 import './catalogue.css'
 import './chat.css'
-import { mountChatWidget } from './chat'
+import { renderCopilotPanelHTML, bindCopilotEvents, type ClinicalContextState } from './chat'
 
 type Drug = {
   id: string
@@ -88,20 +88,49 @@ type HCPUser = {
   lastLoginAt: string | null
 }
 
+type Patient = {
+  patient_id: number
+  full_name: string
+  dob: string
+  sex: string
+}
+
 const DRUG_ENDPOINT = import.meta.env.VITE_DRUGS_API_URL ?? '/api/drugs'
 const PRESCRIPTION_ENDPOINT = import.meta.env.VITE_PRESCRIPTION_API_URL ?? '/api/prescriptions'
 const UPLOAD_EXTRACT_ENDPOINT = '/api/prescriptions/upload-extract'
 const GENE_RECOMMENDATION_ENDPOINT = '/api/gene-recommendation'
+const PATIENT_SEARCH_ENDPOINT = '/api/patients/search'
+const PATIENT_CREATE_ENDPOINT = '/api/patients'
 const FREQUENCIES = ['Once daily', 'Twice daily', 'Three times daily', 'Every 6 hours', 'As needed']
 const SUGGESTION_LIMIT = 6
 const CATALOG_LIMIT = 18
 
 // ── App state ──────────────────────────────────────────────────────────────────
+let currentTheme: 'dark' | 'light' = (localStorage.getItem('genemeds-theme') as 'dark' | 'light') ||
+  (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+
+function applyTheme(theme: 'dark' | 'light') {
+  currentTheme = theme
+  document.documentElement.setAttribute('data-theme', theme)
+  localStorage.setItem('genemeds-theme', theme)
+}
+applyTheme(currentTheme)
+
 let authChecking = true
 let currentHCP: HCPUser | null = null
 let authMode: 'signin' | 'register' = 'signin'
 let authLoading = false
 let authError = ''
+
+// Patient state
+let selectedPatient: Patient | null = null
+let patientSearchQuery = ''
+let patientSearchResults: Patient[] = []
+let patientSearchLoading = false
+let patientSearchError = ''
+let showCreatePatientModal = false
+let createPatientLoading = false
+let createPatientError = ''
 
 let drugs: Drug[] = []
 let loadingDrugs = true
@@ -114,6 +143,7 @@ let submitting = false
 let submitError = ''
 let submitted = false
 let suggestedTests: SuggestedTest[] = []
+let savedPrescriptionId: number | string | null = null
 
 // Step 3 — gene entry
 let diplotypeInputs: Record<string, string> = {}
@@ -126,14 +156,47 @@ let ocrExtractedLines: string[] = []
 let recommendationLoading = false
 let recommendationError = ''
 let recommendationResults: RecommendationResult[] = []
+let selectedRecDrugIndex = 0
+let leftContextCollapsed: Record<string, boolean> = {
+  medicines: false,
+  genes: false,
+  results: false,
+}
 
 // Step 3 — save per drug
-let saveState: Record<string, { loading: boolean; saved: boolean; error: string; savedIds: RecommendationResult['savedRecordIds'] | null }> = {}
+let saveState: Record<string, { loading: boolean; saved: boolean; error: string; savedIds: { resultIds: number[]; assessmentId: number | null } | null }> = {}
+// Copilot panel state
+let copilotCollapsed = localStorage.getItem('genemeds-copilot-collapsed') === 'true'
+
+function getClinicalContext(): ClinicalContextState {
+  return {
+    patient: selectedPatient ? { name: selectedPatient.full_name, dob: selectedPatient.dob, sex: selectedPatient.sex } : null,
+    items: items.map(item => ({
+      name: item.name,
+      dosage: item.dosage,
+      frequency: item.frequency,
+      duration: item.duration,
+      generics: item.generics,
+    })),
+    diplotypes: { ...diplotypeInputs },
+    suggestedTests: suggestedTests.map(t => ({ geneSymbol: t.geneSymbol, drugName: t.drugName })),
+    recommendations: recommendationResults.map(r => ({
+      drugName: r.drugName,
+      recommendation: r.recommendation?.drugRecommendation,
+      safetyStatus: r.drugSafetyStatus?.map(s => ({
+        geneSymbol: s.geneSymbol,
+        phenotypeName: s.phenotypeName,
+        status: s.status,
+        alternativeDrugGeneric: s.alternativeDrugGeneric,
+      })),
+    })),
+  }
+}
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
 // ── Icons ──────────────────────────────────────────────────────────────────────
-const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' | 'refresh' | 'warning' | 'upload' | 'dna' | 'flask' | 'info') => {
+const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' | 'refresh' | 'warning' | 'upload' | 'dna' | 'flask' | 'info' | 'sun' | 'moon' | 'mail' | 'lock' | 'eye' | 'pill' | 'doc') => {
   const paths: Record<string, string> = {
     plus: '<path d="M12 5v14M5 12h14"/>',
     search: '<circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/>',
@@ -147,11 +210,25 @@ const icon = (name: 'plus' | 'search' | 'chevron' | 'trash' | 'check' | 'arrow' 
     dna: '<path d="M2 15c6.667-6 13.333 0 20-6M2 9c6.667 6 13.333 0 20 6M7 11.5c0 0 2-3 5-3s5 3 5 3M7 12.5c0 0 2 3 5 3s5-3 5-3"/>',
     flask: '<path d="M6 2v6l-2 4a4 4 0 0 0 3.4 6h5.2a4 4 0 0 0 3.4-6l-2-4V2"/><path d="M6 2h8"/><path d="M9 12h6"/>',
     info: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41m11.32-11.32l1.41-1.41"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+    lock: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    pill: '<path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><line x1="8.5" y1="8.5" x2="15.5" y2="15.5"/>',
+    doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
   }
   return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name]}</svg>`
 }
 
-const geneLogo = `<svg class="gene-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#ffffff18" stroke-width="1.5" d="M24 4 39 10v11c0 10-6.2 18.2-15 23C15.2 39.2 9 31 9 21V10L24 4Z"/><path stroke="#d9efff" d="M17 14c8 0 6 20 14 20M31 14c-8 0-6 20-14 20M18 19h12M18 29h12"/><path stroke-width="2.3" d="M24 20v8m-4-4h8"/></svg>`
+const geneLogo = `<svg class="gene-logo" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+  <path d="M6 4C12 8 20 24 26 28M26 4C20 8 12 24 6 28" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M10 8C14 12 18 20 22 24M22 8C18 12 14 20 10 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity="0.6"/>
+  <line x1="8" y1="8" x2="24" y2="8" stroke="var(--primary)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="11" y1="13" x2="21" y2="13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="11" y1="19" x2="21" y2="19" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="8" y1="24" x2="24" y2="24" stroke="var(--primary)" stroke-width="2" stroke-linecap="round"/>
+</svg>`
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function escapeHtml(value: string) {
@@ -167,27 +244,165 @@ function escapeAttr(value: string) { return escapeHtml(value) }
 const isComplete = (item: PrescriptionDrug) => Boolean(item.dosage && item.frequency && item.duration)
 const allComplete = () => items.length > 0 && items.every(isComplete)
 
+function formatDob(dobStr: string): string {
+  if (!dobStr) return ''
+  const parts = dobStr.split('-')
+  if (parts.length !== 3) return dobStr
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  const monthIdx = parseInt(parts[1], 10) - 1
+  return `${parseInt(parts[2], 10)} ${months[monthIdx] || ''} ${parts[0]}`
+}
+
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .map(n => n[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase() || 'P'
+}
+
+async function searchPatients(query: string) {
+  patientSearchQuery = query
+  const q = query.trim()
+  if (!q) {
+    patientSearchResults = []
+    patientSearchLoading = false
+    patientSearchError = ''
+    updatePatientResultsContainer()
+    return
+  }
+  patientSearchLoading = true
+  patientSearchError = ''
+  updatePatientResultsContainer()
+
+  try {
+    const res = await fetch(`${PATIENT_SEARCH_ENDPOINT}?q=${encodeURIComponent(q)}`, { credentials: 'include' })
+    if (res.status === 401) {
+      currentHCP = null
+      authError = 'Session expired. Please sign in again.'
+      render()
+      return
+    }
+    if (!res.ok) {
+      throw new Error(`Search failed (${res.status})`)
+    }
+    const data = (await res.json()) as Patient[]
+    patientSearchResults = data
+  } catch (err) {
+    patientSearchError = err instanceof Error ? err.message : 'Error searching patients'
+  } finally {
+    patientSearchLoading = false
+    updatePatientResultsContainer()
+  }
+}
+
+function updatePatientResultsContainer() {
+  const container = document.querySelector('#patient-results-container')
+  if (container) {
+    container.innerHTML = renderPatientSearchResultsHTML()
+  }
+}
+
+async function submitCreatePatient(fullName: string, dob: string, sex: string) {
+  console.log('[PATIENT MODAL] Create Patient submitted')
+  console.log('[PATIENT MODAL] payload =', { full_name: fullName, dob, sex })
+  if (!fullName || !dob || !sex) {
+    createPatientError = 'Please fill in all required patient fields.'
+    render()
+    return
+  }
+  createPatientLoading = true
+  createPatientError = ''
+  render()
+
+  try {
+    const res = await fetch(PATIENT_CREATE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ full_name: fullName, dob, sex }),
+    })
+    console.log('[PATIENT MODAL] API response status =', res.status)
+    if (res.status === 401) {
+      currentHCP = null
+      authError = 'Session expired. Please sign in again.'
+      render()
+      return
+    }
+    if (!res.ok) {
+      const errData = (await res.json().catch(() => ({}))) as { detail?: string }
+      throw new Error(errData.detail ?? 'Failed to create patient.')
+    }
+    const newPatient = (await res.json()) as Patient
+    console.log('[PATIENT MODAL] API response =', res.status)
+    console.log('[PATIENT MODAL] patient created =', newPatient)
+    // Automatically select the newly created patient
+    selectedPatient = newPatient
+    showCreatePatientModal = false
+    createPatientLoading = false
+    createPatientError = ''
+    patientSearchQuery = ''
+    patientSearchResults = []
+    render()
+  } catch (err) {
+    console.error('[PATIENT MODAL] Error creating patient:', err)
+    createPatientError = err instanceof Error ? err.message : 'Could not create patient.'
+    createPatientLoading = false
+    render()
+  }
+}
+
 function uniqueGenes(): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const t of suggestedTests) {
-    if (t.geneSymbol && !seen.has(t.geneSymbol)) { seen.add(t.geneSymbol); out.push(t.geneSymbol) }
+    const gene = (t.geneSymbol || '').trim()
+    if (gene && !seen.has(gene.toUpperCase())) {
+      seen.add(gene.toUpperCase())
+      out.push(gene)
+    }
   }
   return out
 }
+
 function uniqueDrugNames(): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const t of suggestedTests) {
-    if (t.drugName && !seen.has(t.drugName)) { seen.add(t.drugName); out.push(t.drugName) }
+    const d = (t.drugName || '').trim()
+    if (d && !seen.has(d.toLowerCase())) {
+      seen.add(d.toLowerCase())
+      out.push(d)
+    }
+  }
+  if (out.length === 0) {
+    for (const item of items) {
+      const d = (item.selectedGeneric || item.name || '').trim()
+      if (d && !seen.has(d.toLowerCase())) {
+        seen.add(d.toLowerCase())
+        out.push(d)
+      }
+    }
   }
   return out
 }
+
 function genesForDrug(drugName: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
+  const target = drugName.trim().toLowerCase()
   for (const t of suggestedTests) {
-    if (t.drugName === drugName && t.geneSymbol && !seen.has(t.geneSymbol)) { seen.add(t.geneSymbol); out.push(t.geneSymbol) }
+    const d = (t.drugName || '').trim().toLowerCase()
+    const g = (t.geneSymbol || '').trim()
+    if ((d === target || !d) && g && !seen.has(g.toUpperCase())) {
+      seen.add(g.toUpperCase())
+      out.push(g)
+    }
+  }
+  if (out.length === 0) {
+    return uniqueGenes()
   }
   return out
 }
@@ -346,24 +561,34 @@ function renderSignInForm() {
   return `
     <form class="auth-form" onsubmit="return false">
       <div class="auth-form-group">
-        <label for="signin-email">Email Address <b>*</b></label>
+        <label for="signin-email">Email address</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('mail')}</span>
           <input type="email" id="signin-email" class="auth-input" placeholder="doctor@example.com" autocomplete="email" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="signin-password">Password <b>*</b></label>
+        <label for="signin-password">Password</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('lock')}</span>
           <input type="password" id="signin-password" class="auth-input" placeholder="••••••••" autocomplete="current-password" required>
           <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="signin-password" title="Toggle password visibility">
-            ${icon('info')}
+            ${icon('eye')}
           </button>
         </div>
       </div>
 
+      <div class="auth-options">
+        <label class="auth-checkbox">
+          <input type="checkbox" checked>
+          <span>Keep me signed in</span>
+        </label>
+        <a href="#" class="auth-forgot" onclick="event.preventDefault(); alert('Please contact system administrator to reset password.');">Forgot password?</a>
+      </div>
+
       <button type="submit" class="primary auth-submit-btn" id="btn-signin-submit" data-action="submit-signin" ${authLoading ? 'disabled' : ''}>
-        ${authLoading ? '<span class="spinner"></span> Signing in...' : 'Sign In'}
+        ${authLoading ? '<span class="spinner"></span> Signing in...' : `Sign In ${icon('arrow')}`}
       </button>
     </form>
   `
@@ -373,48 +598,53 @@ function renderRegisterForm() {
   return `
     <form class="auth-form" onsubmit="return false">
       <div class="auth-form-group">
-        <label for="reg-fullname">Full Name <b>*</b></label>
+        <label for="reg-fullname">Full Name</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('info')}</span>
           <input type="text" id="reg-fullname" class="auth-input" placeholder="Dr. Jane Doe" autocomplete="name" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-number">Medical Registration Number <b>*</b></label>
+        <label for="reg-number">Medical Registration Number</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('doc')}</span>
           <input type="text" id="reg-number" class="auth-input" placeholder="e.g. MCI-123456" autocomplete="off" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-email">Email Address <b>*</b></label>
+        <label for="reg-email">Email Address</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('mail')}</span>
           <input type="email" id="reg-email" class="auth-input" placeholder="doctor@example.com" autocomplete="email" required>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-password">Password (min 8 characters) <b>*</b></label>
+        <label for="reg-password">Password (min 8 characters)</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('lock')}</span>
           <input type="password" id="reg-password" class="auth-input" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
           <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="reg-password" title="Toggle password visibility">
-            ${icon('info')}
+            ${icon('eye')}
           </button>
         </div>
       </div>
 
       <div class="auth-form-group">
-        <label for="reg-confirm-password">Confirm Password <b>*</b></label>
+        <label for="reg-confirm-password">Confirm Password</label>
         <div class="auth-input-wrap">
+          <span class="input-icon">${icon('lock')}</span>
           <input type="password" id="reg-confirm-password" class="auth-input" placeholder="••••••••" autocomplete="new-password" minlength="8" required>
           <button type="button" class="pw-toggle-btn" data-action="toggle-pw" data-target="reg-confirm-password" title="Toggle password visibility">
-            ${icon('info')}
+            ${icon('eye')}
           </button>
         </div>
       </div>
 
       <button type="submit" class="primary auth-submit-btn" id="btn-register-submit" data-action="submit-register" ${authLoading ? 'disabled' : ''}>
-        ${authLoading ? '<span class="spinner"></span> Creating account...' : 'Create Account'}
+        ${authLoading ? '<span class="spinner"></span> Creating account...' : `Create Account ${icon('arrow')}`}
       </button>
     </form>
   `
@@ -430,6 +660,9 @@ function render() {
             <span class="brand-mark">${geneLogo}</span>
             <span>Gene<span>Meds</span></span>
           </a>
+          <button class="theme-toggle-btn" data-action="toggle-theme" title="Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">
+            ${currentTheme === 'dark' ? icon('sun') : icon('moon')}
+          </button>
         </header>
         <div class="auth-loading-splash">
           <span class="spinner"></span>
@@ -448,26 +681,68 @@ function render() {
             <span class="brand-mark">${geneLogo}</span>
             <span>Gene<span>Meds</span></span>
           </a>
+          <button class="theme-toggle-btn" data-action="toggle-theme" title="Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">
+            ${currentTheme === 'dark' ? icon('sun') : icon('moon')}
+          </button>
         </header>
 
-        <div class="auth-wrapper">
-          <div class="auth-card">
-            <div class="auth-header">
-              <span class="brand-mark">${geneLogo}</span>
-              <h1>Healthcare Professional Portal</h1>
-              <p>Sign in to your account or register to access clinical pharmacogenomic guidance.</p>
+        <div class="auth-layout">
+          <!-- Left Hero Column -->
+          <div class="auth-hero">
+            <div class="auth-hero-platform">PHARMACOGENOMICS PLATFORM</div>
+            <h1>Right drug.<br>For your <span class="highlight">genes</span>.</h1>
+            <p>Evidence-based pharmacogenomic guidance for safer, more effective treatment decisions.</p>
+            <hr class="auth-hero-divider">
+            <div class="auth-hero-stats">
+              <div class="auth-stat-badge">
+                ${icon('pill')}
+                <div>
+                  <strong>500+</strong>
+                  <small>Drugs</small>
+                </div>
+              </div>
+              <div class="auth-stat-badge">
+                ${icon('dna')}
+                <div>
+                  <strong>132+</strong>
+                  <small>Genes</small>
+                </div>
+              </div>
+              <div class="auth-stat-badge">
+                ${icon('doc')}
+                <div>
+                  <strong>CPIC</strong>
+                  <small>Guidelines</small>
+                </div>
+              </div>
             </div>
+          </div>
 
-            <div class="auth-tabs" role="tablist">
-              <button class="auth-tab ${authMode === 'signin' ? 'active' : ''}" data-action="set-auth-mode" data-mode="signin" role="tab">Sign In</button>
-              <button class="auth-tab ${authMode === 'register' ? 'active' : ''}" data-action="set-auth-mode" data-mode="register" role="tab">Register</button>
+          <!-- Right Form Panel -->
+          <div class="auth-panel">
+            <div class="auth-card">
+              <div class="auth-card-logo">
+                <span class="brand-mark">${geneLogo}</span>
+                <span class="brand" style="font-size:18px">Gene<span>Meds</span></span>
+              </div>
+              <h2>${authMode === 'signin' ? 'Welcome back' : 'Create an account'}</h2>
+              <p class="auth-sub">${authMode === 'signin' ? 'Sign in to your account to continue.' : 'Register as a Healthcare Professional.'}</p>
+
+              <div id="auth-error-container">
+                ${authError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(authError)}</div></div>` : ''}
+              </div>
+
+              ${authMode === 'signin' ? renderSignInForm() : renderRegisterForm()}
+
+              <div class="auth-divider">or</div>
+
+              <div class="auth-switch">
+                ${authMode === 'signin'
+                  ? `Don't have an account? <button class="auth-switch-btn" data-action="set-auth-mode" data-mode="register">Register</button>`
+                  : `Already have an account? <button class="auth-switch-btn" data-action="set-auth-mode" data-mode="signin">Sign In</button>`
+                }
+              </div>
             </div>
-
-            <div id="auth-error-container">
-              ${authError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(authError)}</div></div>` : ''}
-            </div>
-
-            ${authMode === 'signin' ? renderSignInForm() : renderRegisterForm()}
           </div>
         </div>
       </main>
@@ -487,51 +762,248 @@ function render() {
     .toUpperCase() || 'DR'
 
   app.innerHTML = `
-    <main class="${step === 3 ? 'main-wide' : ''}">
-      <header>
+    <div class="workspace-layout ${copilotCollapsed ? 'copilot-layout--collapsed' : ''}">
+      <header class="workspace-header">
         <a class="brand" href="#" aria-label="GeneMeds home">
           <span class="brand-mark">${geneLogo}</span>
           <span>Gene<span>Meds</span></span>
         </a>
-        <div class="doctor">
-          <span class="avatar">${escapeHtml(initials)}</span>
-          <div>
-            <strong>${escapeHtml(currentHCP.fullName)}</strong>
-            <small>Reg: ${escapeHtml(currentHCP.registrationNumber)}</small>
+        <div class="header-right">
+          <button class="copilot-header-toggle ${copilotCollapsed ? 'collapsed' : ''}" data-action="toggle-copilot-panel" title="${copilotCollapsed ? 'Expand Copilot Panel' : 'Collapse Copilot Panel'}">
+            <span class="copilot-dot"></span>
+            <span>${copilotCollapsed ? 'Expand Copilot' : 'Copilot Active'}</span>
+          </button>
+          <button class="theme-toggle-btn" data-action="toggle-theme" title="Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme" aria-label="Toggle theme">
+            ${currentTheme === 'dark' ? icon('sun') : icon('moon')}
+          </button>
+          <div class="doctor">
+            <span class="avatar">${escapeHtml(initials)}</span>
+            <div>
+              <strong>${escapeHtml(currentHCP.fullName)}</strong>
+              <small>Reg: ${escapeHtml(currentHCP.registrationNumber)}</small>
+            </div>
+            <button class="doctor-logout-btn" data-action="logout">Sign Out</button>
           </div>
-          <button class="doctor-logout-btn" data-action="logout">Sign Out</button>
         </div>
       </header>
 
-      ${step < 3 ? `
-      <section class="page-heading">
-        <div>
-          <h1>${step === 1 ? 'Create a new prescription' : 'Review drug & generic information'}</h1>
-          <p>${step === 1 ? 'Add medicines and treatment directions for your patient.' : 'Confirm the generic information for the prescribed medicines.'}</p>
-        </div>
-        <div class="step-count">Step <strong>${step}</strong> of 3</div>
-      </section>
-      ${stepper()}
-      ` : ''}
+      <div class="workspace-body">
+        <main class="clinical-stage">
+          <section class="page-heading">
+            <div>
+              <h1>${step === 1 ? 'Create a new prescription' : step === 2 ? 'Enter Genetic Test Results' : 'Clinical Recommendation'}</h1>
+              <p>${step === 1 ? 'Add medicines and treatment directions for your patient.' : step === 2 ? 'Review recommended gene tests and enter patient diplotypes.' : 'Personalized pharmacogenomic guidance for this prescription.'}</p>
+            </div>
+            <div class="step-count">Step <strong>${step}</strong> of 3</div>
+          </section>
+          ${stepper()}
 
-      <div class="page-stage step-${step}">
-        ${step === 1 ? createStep() : step === 2 ? reviewStep() : resultsPage()}
+          <div class="page-stage step-${step}">
+            ${step === 1 ? createStep() : step === 2 ? resultsPage() : recommendationStep()}
+          </div>
+        </main>
+
+        <aside class="copilot-aside-root" id="copilot-aside-root">
+          ${renderCopilotPanelHTML(getClinicalContext(), copilotCollapsed)}
+        </aside>
       </div>
-    </main>
+    </div>
+    ${renderCreatePatientModalHTML()}
   `
 
   syncSearchSuggestions()
   syncUploadState()
   syncLabFileLabel()
+
+  const copilotRoot = document.querySelector<HTMLElement>('#copilot-aside-root')
+  if (copilotRoot) {
+    bindCopilotEvents(
+      copilotRoot,
+      getClinicalContext,
+      () => {
+        copilotCollapsed = !copilotCollapsed
+        localStorage.setItem('genemeds-copilot-collapsed', String(copilotCollapsed))
+        render()
+      },
+      () => {
+        if (copilotRoot) {
+          copilotRoot.innerHTML = renderCopilotPanelHTML(getClinicalContext(), copilotCollapsed)
+          bindCopilotEvents(copilotRoot, getClinicalContext, () => {
+            copilotCollapsed = !copilotCollapsed
+            localStorage.setItem('genemeds-copilot-collapsed', String(copilotCollapsed))
+            render()
+          })
+        }
+      }
+    )
+  }
+}
+
+function patientSection() {
+  if (selectedPatient) {
+    return `
+      <section class="patient-card card">
+        <span class="patient-section-tag">SELECTED PATIENT</span>
+        <div class="patient-summary-content">
+          <div class="patient-avatar-circle">
+            ${escapeHtml(getInitials(selectedPatient.full_name))}
+          </div>
+          <div class="patient-details-body">
+            <div class="patient-name-line">
+              <h3>${escapeHtml(selectedPatient.full_name)}</h3>
+              <span class="patient-id-chip">P${String(selectedPatient.patient_id).padStart(5, '0')}</span>
+            </div>
+            <p class="patient-meta-line">
+              <span>DOB: ${formatDob(selectedPatient.dob)}</span>
+              <span class="dot-separator">•</span>
+              <span>Sex: ${escapeHtml(selectedPatient.sex)}</span>
+            </p>
+          </div>
+          <button class="secondary change-patient-btn" data-action="change-patient">Change Patient</button>
+        </div>
+      </section>
+    `
+  }
+
+  return `
+    <section class="patient-card card">
+      <div class="card-title">
+        <div>
+          <h2>Patient Selection</h2>
+          <p>Search and select an existing patient or create a new patient for this prescription.</p>
+        </div>
+        <button class="secondary btn-create-patient-trigger" data-action="open-create-patient-modal">
+          ${icon('plus')} Create New Patient
+        </button>
+      </div>
+
+      <div class="patient-search-wrap">
+        <label for="patient-search-input">Search Patient</label>
+        <div class="search-box">
+          ${icon('search')}
+          <input
+            id="patient-search-input"
+            autocomplete="off"
+            placeholder="Search patient by name or ID (e.g. Rahul, P00124)..."
+            value="${escapeAttr(patientSearchQuery)}"
+          />
+          ${patientSearchLoading ? '<span class="spinner"></span>' : ''}
+        </div>
+        <div class="patient-results-container" id="patient-results-container">
+          ${renderPatientSearchResultsHTML()}
+        </div>
+      </div>
+    </section>
+  `
+}
+
+function renderPatientSearchResultsHTML() {
+  if (!patientSearchQuery.trim()) {
+    return `
+      <div class="patient-hint-box">
+        Type a patient name or ID above to search existing database records, or click <strong>+ Create New Patient</strong>.
+      </div>
+    `
+  }
+
+  if (patientSearchLoading) {
+    return `<div class="patient-hint-box"><span class="spinner"></span> Searching patients...</div>`
+  }
+
+  if (patientSearchError) {
+    return `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(patientSearchError)}</div></div>`
+  }
+
+  if (patientSearchResults.length === 0) {
+    return `
+      <div class="patient-empty-results">
+        <p>No patients found matching "<strong>${escapeHtml(patientSearchQuery)}</strong>".</p>
+        <button class="primary" data-action="open-create-patient-modal">${icon('plus')} Create New Patient</button>
+      </div>
+    `
+  }
+
+  return `
+    <div class="patient-results-list">
+      ${patientSearchResults.map(p => `
+        <div class="patient-result-item" data-action="select-patient" data-patient-id="${p.patient_id}">
+          <div class="patient-result-avatar">${escapeHtml(getInitials(p.full_name))}</div>
+          <div class="patient-result-info">
+            <strong>${escapeHtml(p.full_name)}</strong>
+            <small>P${String(p.patient_id).padStart(5, '0')} · ${formatDob(p.dob)} · ${escapeHtml(p.sex)}</small>
+          </div>
+          <span class="patient-select-btn">${icon('check')} Select</span>
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
+function renderCreatePatientModalHTML() {
+  if (!showCreatePatientModal) return ''
+
+  const today = new Date().toISOString().split('T')[0]
+
+  return `
+    <div class="patient-modal-backdrop" data-action="close-modal-backdrop">
+      <div class="patient-modal-card">
+        <div class="patient-modal-header">
+          <div>
+            <h3>Create New Patient</h3>
+            <p>Enter basic demographics to create and select patient.</p>
+          </div>
+          <button type="button" class="modal-close-btn" data-action="close-create-patient-modal" title="Close modal">✕</button>
+        </div>
+        <form id="create-patient-form" onsubmit="return false">
+          ${createPatientError ? `<div class="auth-error-banner"><span>⚠️</span> <div>${escapeHtml(createPatientError)}</div></div>` : ''}
+
+          <div class="auth-form-group">
+            <label for="patient-full-name">Full Name <b>*</b></label>
+            <div class="auth-input-wrap">
+              <span class="input-icon">${icon('info')}</span>
+              <input type="text" id="patient-full-name" class="auth-input" placeholder="e.g. Rahul Sharma" required>
+            </div>
+          </div>
+
+          <div class="auth-form-group">
+            <label for="patient-dob">Date of Birth <b>*</b></label>
+            <div class="auth-input-wrap">
+              <span class="input-icon">${icon('doc')}</span>
+              <input type="date" id="patient-dob" class="auth-input" max="${today}" required>
+            </div>
+          </div>
+
+          <div class="auth-form-group">
+            <label for="patient-sex">Sex <b>*</b></label>
+            <div class="auth-input-wrap">
+              <select id="patient-sex" class="auth-input" required>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="patient-modal-footer">
+            <button type="button" class="secondary" data-action="close-create-patient-modal">Cancel</button>
+            <button type="submit" class="primary" id="btn-create-patient-submit" data-action="submit-create-patient" ${createPatientLoading ? 'disabled' : ''}>
+              ${createPatientLoading ? '<span class="spinner"></span> Creating...' : `Create & Select ${icon('arrow')}`}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `
 }
 
 function stepper() {
-  const labels = ['Create prescription', 'Review drug info', 'Gene test results']
+  const labels = ['Prescription', 'Genetic Results', 'Clinical Recommendation']
   return `<nav class="stepper" aria-label="Prescription steps">${labels
     .map((label, index) => {
       const n = index + 1
       const state = n === step ? 'active' : n < step ? 'done' : ''
-      return `<div class="step ${state}"><span class="step-number">${n < step ? icon('check') : n}</span><span>${label}</span></div>${n < 3 ? '<div class="step-line"></div>' : ''}`
+      const clickable = n === 1 || (n === 2 && (step >= 2 || submitted)) || (n === 3 && recommendationResults.length > 0)
+      return `<div class="step ${state} ${clickable ? 'step--clickable' : ''}" ${clickable ? `data-action="go-to-step" data-step-num="${n}"` : ''}><span class="step-number">${n < step ? icon('check') : n}</span><span>${label}</span></div>${n < 3 ? '<div class="step-line"></div>' : ''}`
     })
     .join('')}</nav>`
 }
@@ -541,6 +1013,7 @@ function createStep() {
   const catalogue = getCatalogueDrugs(query, CATALOG_LIMIT)
   const hasQuery = Boolean(query.trim())
   return `
+    ${patientSection()}
     <section class="card prescription-card">
       <div class="card-title">
         <div>
@@ -572,7 +1045,7 @@ function createStep() {
           </div>
           <span class="medicine-count">${loadingDrugs ? 'Loading' : `${drugs.length} total`}</span>
         </div>
-        ${renderCatalogue(catalogue)}
+        <div class="catalogue-grid-wrap">${renderCatalogue(catalogue)}</div>
       </section>
 
       ${items.length ? `<div class="drug-list">${items.map((item, index) => drugForm(item, index)).join('')}</div>` : emptyState()}
@@ -581,7 +1054,7 @@ function createStep() {
 
       <footer class="card-footer">
         <span class="completion-note">${allComplete() ? 'All treatment details are complete.' : items.length ? 'Complete dosage, frequency, and duration for each medicine.' : 'Add at least one medicine to continue.'}</span>
-        <button class="primary" data-action="submit-prescription" ${allComplete() || submitting ? '' : 'disabled'}>${submitting ? '<span class="spinner"></span> Uploading...' : `Upload prescription ${icon('arrow')}`}</button>
+        <button class="primary" data-action="submit-prescription" ${allComplete() || submitting ? '' : 'disabled'}>${submitting ? '<span class="spinner"></span> Uploading...' : `Proceed ${icon('arrow')}`}</button>
       </footer>
     </section>
   `
@@ -626,40 +1099,12 @@ function drugForm(item: PrescriptionDrug, index: number) {
   `
 }
 
-// ── Step 2: Review generics ───────────────────────────────────────────────────
-function reviewStep() {
-  return `
-    <section class="card review-card">
-      <div class="card-title">
-        <div>
-          <h2>Generic information</h2>
-          <p>Review the source and selected generic for every prescribed medicine.</p>
-        </div>
-        <span class="verified">${icon('check')} Verified data</span>
-      </div>
-      <div class="review-table">
-        <div class="table-head"><span>DRUG</span><span>GENERIC NAME(S)</span><span>SELECTED GENERIC</span><span>SOURCE</span></div>
-        ${items.map(item => `
-          <article class="table-row">
-            <div><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.strength)}</small></div>
-            <div class="generic-tags">${item.generics.map(g => `<span>${escapeHtml(g)}</span>`).join('')}</div>
-            <div class="selected">${icon('check')} ${escapeHtml(item.selectedGeneric)}</div>
-            <div class="source">${escapeHtml(item.source)}</div>
-          </article>`).join('')}
-      </div>
-      <footer class="card-footer">
-        <button class="secondary" data-action="back-to-create">Back</button>
-        <button class="primary" data-action="next-step">Continue to gene results ${icon('arrow')}</button>
-      </footer>
-    </section>
-  `
-}
+// ── Step 2: Genetic results & diplotype entry ─────────────────────────
 
 // ── Step 3: Full-width results page ───────────────────────────────────────────
 function resultsPage() {
   const genes = uniqueGenes()
   const hasAnyDiplotype = genes.some(g => (diplotypeInputs[g] ?? '').trim())
-  const hasAnyResult = recommendationResults.some(r => r.found && r.recommendation)
   const actionableCount = recommendationResults.filter(r => r.found && r.recommendation).length
 
   return `
@@ -791,31 +1236,361 @@ function resultsPage() {
                 ? `<span class="get-rec-ready">${icon('check')} Ready — unfilled genes will be listed as missing in the result</span>`
                 : `<span class="get-rec-hint">${icon('info')} Enter at least one diplotype to get a recommendation</span>`}
             </div>
-            <button class="primary get-rec-btn" data-action="get-recommendation" ${recommendationLoading || !hasAnyDiplotype ? 'disabled' : ''}>
-              ${recommendationLoading ? '<span class="spinner"></span> Generating…' : `${icon('dna')} Get Recommendation`}
-            </button>
+            <div style="display:flex;gap:10px;align-items:center;">
+              ${recommendationResults.length ? `
+                <button class="secondary" data-action="go-to-step" data-step-num="3" type="button">
+                  View Recommendations ${icon('arrow')}
+                </button>
+              ` : ''}
+              <button class="primary get-rec-btn" data-action="get-recommendation" ${recommendationLoading || !hasAnyDiplotype ? 'disabled' : ''}>
+                ${recommendationLoading ? '<span class="spinner"></span> Generating…' : `${icon('dna')} Get Recommendation ${icon('arrow')}`}
+              </button>
+            </div>
           </div>
           ${recommendationError ? `<div class="entry-error" style="margin-top:12px">${icon('warning')} ${escapeHtml(recommendationError)}</div>` : ''}
         </div>
         ` : ''}
+      </div>
+    </div>
+  `
+}
 
-        <!-- Section 03 -->
-        ${recommendationResults.length ? `
-        <div class="rp-sec">
-          <div class="rp-sec-label">
-            <span class="rp-sec-num">03</span>
-            <div>
-              <h2 class="rp-sec-title">Clinical Recommendations</h2>
-              <p class="rp-sec-sub">CPIC-based pharmacogenomic guidance for each prescribed medicine.</p>
+// ── Step 3: Dedicated Clinical Recommendation Workspace ───────────────────────
+function recommendationStep(): string {
+  if (!selectedPatient) {
+    return `
+      <div class="card" style="padding: 40px; text-align: center;">
+        <div style="font-size: 32px; margin-bottom: 12px;">⚠️</div>
+        <h3 style="font-size: 18px; margin-bottom: 8px;">No Patient Selected</h3>
+        <p style="color: var(--text-muted); margin-bottom: 20px;">Please return to Step 1 to select or create a patient before reviewing recommendations.</p>
+        <button class="primary" data-action="back-to-create">${icon('arrow')} Return to Step 1</button>
+      </div>
+    `
+  }
+
+  const genes = uniqueGenes()
+  const recResults = recommendationResults
+  const activeIndex = Math.min(selectedRecDrugIndex, Math.max(0, recResults.length - 1))
+  const currentRec = recResults[activeIndex] || (recResults.length ? recResults[0] : null)
+
+  return `
+    <div class="rec-workspace-layout">
+      <!-- Left Context Panel (Evidence Trail) -->
+      <aside class="rec-left-context">
+        <div class="rec-context-card">
+          <div class="rec-context-header">
+            <h3>Clinical Context</h3>
+            <span class="rec-context-badge">Evidence Trail</span>
+          </div>
+
+          <!-- Section 1: Prescribed Medicines -->
+          <div class="rec-context-sec ${leftContextCollapsed.medicines ? 'collapsed' : ''}">
+            <button class="rec-context-sec-title" data-action="toggle-left-sec" data-sec="medicines" type="button">
+              <span>PRESCRIBED MEDICINES</span>
+              <span class="rec-collapse-arrow">${icon('chevron')}</span>
+            </button>
+            <div class="rec-context-sec-content">
+              ${items.length ? items.map(item => `
+                <div class="rec-context-med-item">
+                  <strong>${escapeHtml(item.name)}</strong>
+                  <small>${escapeHtml(item.strength)} · ${escapeHtml(item.dosage || 'Dosage pending')} ${escapeHtml(item.frequency || '')}</small>
+                </div>
+              `).join('') : '<div class="rec-none-text">No medicines listed</div>'}
             </div>
           </div>
-          ${hasAnyResult ? `<div class="rc-section-summary">${icon('check')} ${actionableCount} of ${recommendationResults.length} drug${recommendationResults.length !== 1 ? 's have' : ' has'} actionable recommendations</div>` : ''}
-          ${renderRecommendationBlocks()}
-          ${hasAnyResult ? `<p class="rc-disclaimer">${icon('info')} These recommendations are derived from CPIC guidelines. Apply clinical judgement before acting on any suggestion.</p>` : ''}
+
+          <!-- Section 2: Affected Genes -->
+          <div class="rec-context-sec ${leftContextCollapsed.genes ? 'collapsed' : ''}">
+            <button class="rec-context-sec-title" data-action="toggle-left-sec" data-sec="genes" type="button">
+              <span>AFFECTED GENES</span>
+              <span class="rec-collapse-arrow">${icon('chevron')}</span>
+            </button>
+            <div class="rec-context-sec-content">
+              <div class="rec-gene-tags">
+                ${genes.length ? genes.map(g => `<span class="gene-chip">${escapeHtml(g)}</span>`).join('') : '<span class="rec-none-text">No genes identified</span>'}
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 3: Genetic Results -->
+          <div class="rec-context-sec ${leftContextCollapsed.results ? 'collapsed' : ''}">
+            <button class="rec-context-sec-title" data-action="toggle-left-sec" data-sec="results" type="button">
+              <span>GENETIC RESULTS</span>
+              <span class="rec-collapse-arrow">${icon('chevron')}</span>
+            </button>
+            <div class="rec-context-sec-content">
+              ${genes.length ? genes.map(gene => {
+                const dip = (diplotypeInputs[gene] ?? '').trim()
+                const phenoObj = currentRec?.phenotypes?.[gene]
+                const pheno = phenoObj?.phenotypeName
+                return `
+                  <div class="rec-context-result-item">
+                    <div class="rec-context-result-gene">
+                      <span class="gene-chip">${escapeHtml(gene)}</span>
+                      <code class="rec-dip-val">${escapeHtml(dip || 'Not entered')}</code>
+                    </div>
+                    ${pheno ? `<div class="rec-pheno-val">${escapeHtml(pheno)}</div>` : ''}
+                  </div>
+                `
+              }).join('') : '<div class="rec-none-text">No genetic results entered</div>'}
+              ${ocrExtractedLines.length ? `<div class="rec-ocr-tag">${icon('flask')} Lab OCR Extracted</div>` : ''}
+            </div>
+          </div>
+
         </div>
+      </aside>
+
+      <!-- Center Main Recommendation Workspace -->
+      <main class="rec-center-main">
+
+        <!-- Patient Identity Banner -->
+        <div class="rec-patient-banner">
+          <div class="rec-patient-avatar">${escapeHtml(getInitials(selectedPatient.full_name))}</div>
+          <div class="rec-patient-info">
+            <div class="rec-patient-name-line">
+              <h2 class="rec-patient-name">${escapeHtml(selectedPatient.full_name)}</h2>
+              <span class="rec-patient-id">P${String(selectedPatient.patient_id).padStart(5, '0')}</span>
+            </div>
+            <div class="rec-patient-meta-line">
+              <span>DOB: ${formatDob(selectedPatient.dob)}</span>
+              <span class="dot-sep">•</span>
+              <span>Sex: ${escapeHtml(selectedPatient.sex)}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Multiple Medicine Selector Tabs -->
+        ${recResults.length > 1 ? `
+          <div class="rec-medicine-tabs" role="tablist">
+            ${recResults.map((r, i) => `
+              <button
+                class="rec-med-tab ${i === activeIndex ? 'active' : ''}"
+                data-action="select-rec-tab"
+                data-index="${i}"
+                role="tab"
+                type="button"
+                aria-selected="${i === activeIndex ? 'true' : 'false'}"
+              >
+                <span class="tab-drug-name">${escapeHtml(r.genericName ?? r.drugName)}</span>
+                ${r.recommendation ? `<span class="tab-dot tab-dot--active"></span>` : `<span class="tab-dot tab-dot--muted"></span>`}
+              </button>
+            `).join('')}
+          </div>
         ` : ''}
 
+        <!-- Center Recommendation Card Content -->
+        ${renderCenterRecommendationContent(currentRec)}
+
+        <!-- Bottom Action Bar -->
+        <footer class="rec-action-footer">
+          <button class="secondary" data-action="back-to-genetics" type="button">
+            ${icon('arrow')} Back to Genetic Results
+          </button>
+          
+          <div class="rec-action-right">
+            ${currentRec && currentRec.found && currentRec.recommendation ? `
+              ${saveState[currentRec.drugName]?.saved
+                ? `<span class="rc-saved-badge">${icon('check')} Recommendation Saved</span>`
+                : `<button class="primary" data-action="save-recommendation" data-drug="${escapeAttr(currentRec.drugName)}" ${saveState[currentRec.drugName]?.loading ? 'disabled' : ''} type="button">
+                    ${saveState[currentRec.drugName]?.loading ? '<span class="spinner"></span> Saving...' : `${icon('check')} Save Recommendation`}
+                  </button>`
+              }
+            ` : ''}
+          </div>
+        </footer>
+
+      </main>
+    </div>
+  `
+}
+
+function renderCenterRecommendationContent(res: RecommendationResult | null): string {
+  if (!res) {
+    return `
+      <div class="rec-main-card rec-main-card--status-gray">
+        <div class="empty-prescription">
+          <span>${icon('flask')}</span>
+          <h3>No Recommendation Available</h3>
+          <p>Please enter diplotype results on Step 2 and click "Get Recommendation".</p>
+        </div>
       </div>
+    `
+  }
+
+  const drugTitle = escapeHtml(res.genericName ?? res.drugName)
+  const isFound = res.found
+  const rec = res.recommendation
+  const missing = res.missingGeneData ?? []
+  const phenotypes = res.phenotypes ?? {}
+  const phenotypeEntries = Object.entries(phenotypes)
+  const safetyList = res.drugSafetyStatus ?? []
+
+  // Determine status classification and styling
+  let statusBadgeText = 'No CPIC data available'
+  let statusClass = 'status-gray'
+  let statusIcon = icon('warning')
+
+  if (!isFound || !rec) {
+    statusBadgeText = missing.length ? 'Insufficient genetic info' : 'No CPIC data available'
+    statusClass = 'status-gray'
+    statusIcon = icon('warning')
+  } else {
+    // Has recommendation
+    const hasAlternate = safetyList.some(s => s.status === 'alternate_found')
+    const hasRisk = safetyList.some(s => s.status === 'no_alternative_documented')
+    const cpicTest = suggestedTests.find(t => t.drugName === res.genericName || t.drugName === res.drugName)
+    const cpicLevel = cpicTest?.cpicLevel
+
+    if (hasAlternate) {
+      statusBadgeText = 'Alternative recommended'
+      statusClass = 'status-blue'
+      statusIcon = icon('info')
+    } else if (hasRisk) {
+      statusBadgeText = 'Actionable PGx result'
+      statusClass = 'status-amber'
+      statusIcon = icon('warning')
+    } else if (cpicLevel === 'A' || cpicLevel === 'B') {
+      statusBadgeText = 'Actionable PGx result'
+      statusClass = 'status-green'
+      statusIcon = icon('check')
+    } else {
+      statusBadgeText = 'Guidance available'
+      statusClass = 'status-blue'
+      statusIcon = icon('check')
+    }
+  }
+
+  // Phenotype headline string e.g. "CYP2C19 · Poor Metabolizer"
+  const phenotypeHeadline = phenotypeEntries.length
+    ? phenotypeEntries.map(([gene, ph]) => `${gene} · ${ph.phenotypeName}`).join(' | ')
+    : 'Pharmacogenomic Recommendation'
+
+  return `
+    <div class="rec-main-card rec-main-card--${statusClass}">
+      <!-- Header: Drug Name + Status -->
+      <div class="rec-card-header">
+        <div class="rec-drug-header-info">
+          <span class="rec-drug-label">PRESCRIBED DRUG</span>
+          <h2 class="rec-drug-title">${drugTitle}</h2>
+          <span class="rec-gene-finding">${escapeHtml(phenotypeHeadline)}</span>
+        </div>
+        <div class="rec-status-badge ${statusClass}">
+          ${statusIcon}
+          <span>${escapeHtml(statusBadgeText)}</span>
+        </div>
+      </div>
+
+      <!-- Phenotype pill strip -->
+      ${phenotypeEntries.length ? `
+        <div class="rec-pheno-strip">
+          ${phenotypeEntries.map(([gene, ph]) => {
+            const dip = escapeHtml(diplotypeInputs[gene] ?? '—')
+            return `
+              <div class="rec-pheno-tag">
+                <span class="rec-pheno-gene">${escapeHtml(gene)}</span>
+                <code class="rec-pheno-dip">${dip}</code>
+                <span class="rec-pheno-name">${escapeHtml(ph.phenotypeName)}</span>
+              </div>
+            `
+          }).join('')}
+        </div>
+      ` : ''}
+
+      <!-- Primary Recommendation Box -->
+      <div class="rec-primary-box">
+        <div class="rec-primary-label">
+          ${icon('dna')}
+          <span>PRIMARY RECOMMENDATION</span>
+        </div>
+        ${rec ? `
+          <div class="rec-primary-text">
+            ${escapeHtml(rec.drugRecommendation)}
+          </div>
+        ` : `
+          <div class="rec-primary-text rec-primary-text--empty">
+            ${isFound
+              ? 'No applicable CPIC recommendation was returned for the available genetic information.'
+              : escapeHtml(res.reason ?? 'No CPIC pharmacogenomic recommendation available.')
+            }
+          </div>
+        `}
+      </div>
+
+      <!-- Missing diplotypes alert if applicable -->
+      ${!rec && missing.length ? `
+        <div class="rec-alert-box rec-alert-box--amber">
+          ${icon('warning')}
+          <div>
+            <strong>Missing Diplotype Data</strong>
+            <p>Additional diplotypes needed for a complete recommendation: ${missing.map(g => `<span class="gene-chip">${escapeHtml(g)}</span>`).join(' ')}</p>
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Rationale Section -->
+      ${(rec?.comments || rec?.implications) ? `
+        <div class="rec-section-block">
+          <h3 class="rec-section-title">Why this recommendation?</h3>
+          <div class="rec-section-body">
+            ${rec.comments ? `<p>${escapeHtml(rec.comments)}</p>` : ''}
+            ${rec.implications ? `<p><strong>Clinical Implications:</strong> ${escapeHtml(String(rec.implications))}</p>` : ''}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Alternative Therapy Section -->
+      ${safetyList.length ? `
+        <div class="rec-section-block">
+          <h3 class="rec-section-title">Alternative Therapy & Safety Assessment</h3>
+          <div class="rec-alt-list">
+            ${safetyList.map(s => {
+              if (s.status === 'alternate_found' && s.alternativeDrugGeneric) {
+                return `
+                  <div class="rec-alt-card rec-alt-card--found">
+                    <div class="rec-alt-head">
+                      <span class="rec-alt-badge">${icon('check')} Recommended Alternative</span>
+                      <strong class="rec-alt-name">${escapeHtml(s.alternativeDrugGeneric)}</strong>
+                    </div>
+                    <div class="rec-alt-meta">
+                      <span>Gene: <strong>${escapeHtml(s.geneSymbol)}</strong> (${escapeHtml(s.phenotypeName)})</span>
+                    </div>
+                    ${s.rationale ? `<div class="rec-alt-rationale"><p>${escapeHtml(s.rationale)}</p></div>` : ''}
+                    ${s.guidelineTitle ? `<div class="rec-alt-guide"><small>Guideline: ${escapeHtml(s.guidelineTitle)}</small></div>` : ''}
+                  </div>
+                `
+              }
+              if (s.status === 'no_alternative_documented') {
+                return `
+                  <div class="rec-alt-card rec-alt-card--warning">
+                    <div class="rec-alt-head">
+                      <span class="rec-alt-badge warning">${icon('warning')} Risk Identified</span>
+                      <strong class="rec-alt-name">Use Caution / Consult Guidelines</strong>
+                    </div>
+                    <div class="rec-alt-meta">
+                      <span>Gene: <strong>${escapeHtml(s.geneSymbol)}</strong> (${escapeHtml(s.phenotypeName)})</span>
+                    </div>
+                    <p class="rec-alt-text">Specific alternative therapy is not documented in CPIC for this phenotype. Close clinical monitoring is advised.</p>
+                  </div>
+                `
+              }
+              return ''
+            }).join('')}
+          </div>
+        </div>
+      ` : ''}
+
+      <!-- Guideline & Evidence Section -->
+      <div class="rec-section-block rec-section-block--evidence">
+        <h3 class="rec-section-title">Guideline & Evidence</h3>
+        <div class="rec-evidence-row">
+          <div class="rec-evidence-info">
+            <span class="rec-evidence-source">CPIC Guidelines</span>
+            <span class="rec-evidence-title">${escapeHtml(rec?.guidelineTitle ?? 'Clinical Pharmacogenetics Implementation Consortium')}</span>
+          </div>
+          ${rec?.guidelineTitle ? `<span class="rec-evidence-check">${icon('check')} Level A Evidence</span>` : ''}
+        </div>
+      </div>
+
     </div>
   `
 }
@@ -847,133 +1622,7 @@ function renderGeneTestTable(): string {
     </div>`
 }
 
-function renderRecommendationBlocks(): string {
-  return recommendationResults.map(res => {
-    if (!res.found) {
-      return `
-        <div class="rc-card rc-card--gray">
-          <div class="rc-header">
-            <div class="rc-drug-icon rc-drug-icon--gray">${icon('warning')}</div>
-            <div>
-              <div class="rc-drug-name">${escapeHtml(res.drugName)}</div>
-              <div class="rc-drug-generic">No CPIC data available</div>
-            </div>
-            <span class="rc-status-badge rc-badge--gray">No CPIC data</span>
-          </div>
-          <div class="rc-footer">
-            <span class="rc-guideline">${escapeHtml(res.reason ?? 'No pharmacogenomic guideline found.')}</span>
-          </div>
-        </div>`
-    }
-
-    const missing = res.missingGeneData ?? []
-    const rec = res.recommendation
-    const phenotypes = res.phenotypes ?? {}
-    const ss = saveState[res.drugName]
-
-    // Determine color
-    const cpic = (rec ? (suggestedTests.find(t => t.drugName === res.genericName || t.drugName === res.drugName)?.cpicLevel ?? null) : null)
-    let color = 'blue'
-    if (!rec) color = 'amber'
-    else if (cpic === 'A' || cpic === 'B') color = 'green'
-    else if (cpic === 'C') color = 'amber'
-    else color = 'blue'
-    if (!res.found) color = 'gray'
-
-    const statusText = rec
-      ? (color === 'green' ? 'Actionable' : color === 'amber' ? 'Guidance available' : 'Recommendation found')
-      : 'Incomplete data'
-
-    const phenotypeEntries = Object.entries(phenotypes)
-
-    return `
-      <div class="rc-card rc-card--${color}">
-        <div class="rc-header">
-          <div class="rc-drug-icon rc-drug-icon--${color}">${icon('flask')}</div>
-          <div>
-            <div class="rc-drug-name">${escapeHtml(res.genericName ?? res.drugName)}</div>
-            <div class="rc-drug-generic">Generic · ${escapeHtml(res.drugName)}</div>
-          </div>
-          <span class="rc-status-badge rc-badge--${color}">${rec ? icon('check') : icon('warning')} ${statusText}</span>
-        </div>
-
-        ${phenotypeEntries.length ? `
-          <div class="rc-phenotype-strip">
-            ${phenotypeEntries.map(([gene, ph]) => {
-              const dip = escapeHtml(diplotypeInputs[gene] ?? '—')
-              return `<span class="rc-pheno-pill"><b class="rc-pheno-gene">${escapeHtml(gene)}</b><code class="rc-pheno-dip">${dip}</code><span class="rc-pheno-name">${escapeHtml(ph.phenotypeName)}</span></span>`
-            }).join('')}
-          </div>` : ''}
-
-        ${rec ? `<div class="rc-rec-box"><p>${escapeHtml(rec.drugRecommendation)}</p></div>` : ''}
-
-        ${!rec && missing.length ? `
-          <div class="rc-no-rec-box">
-            ${icon('warning')}
-            <div>Missing diplotypes for a full recommendation: ${missing.map(g => `<span class="gene-chip">${escapeHtml(g)}</span>`).join(' ')}</div>
-          </div>` : ''}
-
-        ${(res.drugSafetyStatus ?? []).length ? `
-          <div class="rc-safety-section">
-            <div class="rc-safety-label">Drug Safety Assessment</div>
-            ${(res.drugSafetyStatus ?? []).map(ss => {
-              if (ss.status === 'not_risky') {
-                return `<div class="rc-safety-row rc-safety--green">
-                  <span class="rc-safety-icon">${icon('check')}</span>
-                  <div class="rc-safety-body">
-                    <strong>No genetic concern</strong>
-                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                  </div>
-                  <span class="rc-safety-badge rc-safety-badge--green">Not risky</span>
-                </div>`
-              }
-              if (ss.status === 'alternate_found') {
-                return `<div class="rc-safety-row rc-safety--blue">
-                  <span class="rc-safety-icon">${icon('info')}</span>
-                  <div class="rc-safety-body">
-                    <strong>Consider alternate: <span class="rc-alt-drug">${escapeHtml(ss.alternativeDrugGeneric ?? '')}</span></strong>
-                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                    ${ss.rationale ? `<span class="rc-safety-rationale">${escapeHtml(ss.rationale.substring(0, 180))}${ss.rationale.length > 180 ? '…' : ''}</span>` : ''}
-                  </div>
-                  <span class="rc-safety-badge rc-safety-badge--blue">CPIC Guideline</span>
-                </div>`
-              }
-              if (ss.status === 'no_alternative_documented') {
-                return `<div class="rc-safety-row rc-safety--amber">
-                  <span class="rc-safety-icon">${icon('warning')}</span>
-                  <div class="rc-safety-body">
-                    <strong>Risky — no specific alternate documented</strong>
-                    <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                    <span class="rc-safety-rationale">Consult the CPIC guideline before dispensing.</span>
-                  </div>
-                  <span class="rc-safety-badge rc-safety-badge--amber">Review needed</span>
-                </div>`
-              }
-              // unknown
-              return `<div class="rc-safety-row rc-safety--gray">
-                <span class="rc-safety-icon">${icon('info')}</span>
-                <div class="rc-safety-body">
-                  <strong>No safety data available</strong>
-                  <span class="rc-safety-gene">${escapeHtml(ss.geneSymbol)} · ${escapeHtml(ss.phenotypeName)}</span>
-                </div>
-                <span class="rc-safety-badge rc-safety-badge--gray">Unknown</span>
-              </div>`
-            }).join('')}
-          </div>` : ''}
-
-        <div class="rc-footer">
-          <span class="rc-guideline">
-            ${rec?.guidelineTitle ? `${icon('check')} ${escapeHtml(rec.guidelineTitle)}` : ''}
-          </span>
-          ${rec ? (ss?.saved && ss.savedIds
-            ? `<div class="rc-saved-badge">${icon('check')} Saved <span class="rc-saved-ids">Record #${ss.savedIds.resultIds?.[0] ?? '?'}</span></div>`
-            : `<button class="primary rc-save-btn" data-action="save-recommendation" data-drug="${escapeAttr(res.drugName)}" ${ss?.loading ? 'disabled' : ''}>
-                ${ss?.loading ? '<span class="spinner"></span> Saving…' : `${icon('check')} Save to patient record`}
-              </button>`) : ''}
-        </div>
-      </div>`
-  }).join('')
-}
+// ── DOM sync helpers ───────────────────────────────────────────────────────────
 
 // ── DOM sync helpers ───────────────────────────────────────────────────────────
 function syncSearchSuggestions() {
@@ -1107,11 +1756,17 @@ function extractList(body: unknown): DrugApiItem[] {
 
 async function submitPrescription() {
   if (!allComplete() || submitting) return
+  if (!selectedPatient) {
+    submitError = 'Please search and select a patient before continuing.'
+    render()
+    return
+  }
   submitting = true; submitError = ''; render()
 
   const payload = {
     prescriptionId: `draft-${Date.now()}`,
     prescribedAt: new Date().toISOString(),
+    patientId: selectedPatient.patient_id,
     prescribedDrugs: items.map(item => ({
       drugId: item.id, drugName: item.name, strength: item.strength,
       generics: item.generics, selectedGeneric: item.selectedGeneric,
@@ -1133,7 +1788,7 @@ async function submitPrescription() {
       return
     }
     if (!response.ok) throw new Error(`Prescription upload failed with status ${response.status}`)
-    const body = (await response.json()) as { suggestedTests?: unknown }
+    const body = (await response.json()) as { suggestedTests?: unknown; prescription_id?: number | string }
     suggestedTests = extractSuggestedTests(body.suggestedTests)
     submitted = true
     step = 2
@@ -1211,29 +1866,51 @@ async function getRecommendation() {
   if (recommendationLoading) return
 
   // Sync any diplotype input values from the live DOM into state before render()
-  // destroys the elements. This ensures OCR-filled or programmatically set values
-  // that didn't go through the input event handler are captured.
   document.querySelectorAll<HTMLInputElement>('[data-action="diplotype-input"][data-gene]')
     .forEach(el => {
       const gene = el.dataset.gene
       if (gene && el.value.trim()) diplotypeInputs[gene] = el.value.trim()
     })
 
-  recommendationLoading = true; recommendationError = ''; recommendationResults = []; render()
+  const drugNames = uniqueDrugNames()
+  console.log('[RECOMMENDATIONS] Fetching for drugNames =', drugNames)
+  console.log('[RECOMMENDATIONS] Current diplotypeInputs =', diplotypeInputs)
+
+  if (drugNames.length === 0) {
+    console.warn('[RECOMMENDATIONS] No drug names found for recommendation lookup.')
+    recommendationError = 'No medicines found in prescription to look up recommendations.'
+    render()
+    return
+  }
+
+  recommendationLoading = true
+  recommendationError = ''
+  recommendationResults = []
+  render()
 
   try {
     const results = await Promise.all(
-      uniqueDrugNames().map(async drugName => {
+      drugNames.map(async drugName => {
         const diplotypes = genesForDrug(drugName)
           .filter(g => (diplotypeInputs[g] ?? '').trim())
           .map(g => ({ geneSymbol: g, diplotypeName: diplotypeInputs[g].trim() }))
+
+        console.log(`[RECOMMENDATIONS] Calling POST /api/gene-recommendation for '${drugName}' with diplotypes:`, diplotypes)
+
         try {
           const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ drugName, diplotypes }),
+            body: JSON.stringify({
+              drugName,
+              diplotypes,
+              patientId: selectedPatient?.patient_id ?? null,
+              enteredByDoctorId: currentHCP?.id ?? null,
+            }),
           })
+          console.log(`[RECOMMENDATIONS] Response status for '${drugName}':`, response.status)
+
           if (response.status === 401) {
             currentHCP = null
             authError = 'Session expired. Please sign in again.'
@@ -1245,23 +1922,36 @@ async function getRecommendation() {
             return { drugName, found: false, reason: err.detail ?? `Failed with status ${response.status}` } as RecommendationResult
           }
           const body = (await response.json()) as RecommendationResult
+          console.log(`[RECOMMENDATIONS] Received result for '${drugName}':`, body)
           return { ...body, drugName }
         } catch (error) {
+          console.error(`[RECOMMENDATIONS] Fetch error for '${drugName}':`, error)
           return { drugName, found: false, reason: error instanceof Error ? error.message : 'Network error.' } as RecommendationResult
         }
       })
     )
+    console.log('[RECOMMENDATIONS] All results received =', results)
     recommendationResults = results
+    selectedRecDrugIndex = 0
+    step = 3
   } catch (error) {
+    console.error('[RECOMMENDATIONS] Error in getRecommendation =', error)
     recommendationError = error instanceof Error ? error.message : 'Could not fetch recommendations.'
   } finally {
-    recommendationLoading = false; render()
+    recommendationLoading = false
+    render()
   }
 }
 
 async function saveRecommendation(drugName: string) {
   const existing = recommendationResults.find(r => r.drugName === drugName)
   if (!existing?.found || !existing.recommendation) return
+
+  if (!selectedPatient) {
+    saveState[drugName] = { loading: false, saved: false, error: 'Please select a patient first.', savedIds: null }
+    render()
+    return
+  }
 
   saveState[drugName] = { loading: true, saved: false, error: '', savedIds: null }; render()
 
@@ -1270,11 +1960,52 @@ async function saveRecommendation(drugName: string) {
     .map(g => ({ geneSymbol: g, diplotypeName: diplotypeInputs[g].trim() }))
 
   try {
+    // 1. Ensure prescription header & items are transactionally persisted to database if not already saved
+    if (!savedPrescriptionId) {
+      console.log('[PRESCRIPTION SAVE] sending final prescription')
+      console.log('[PRESCRIPTION SAVE] patient_id =', selectedPatient.patient_id)
+      console.log('[PRESCRIPTION SAVE] persist = true')
+      console.log('[PRESCRIPTION SAVE] items =', items)
+
+      const rxPayload = {
+        patientId: selectedPatient.patient_id,
+        persist: true,
+        prescribedDrugs: items.map(item => ({
+          drugId: item.id, drugName: item.name, strength: item.strength,
+          generics: item.generics, selectedGeneric: item.selectedGeneric,
+          dosage: item.dosage, frequency: item.frequency,
+          durationDays: Number(item.duration), note: item.note,
+        })),
+      }
+      const rxRes = await fetch(PRESCRIPTION_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(rxPayload),
+      })
+      if (rxRes.ok) {
+        const rxBody = (await rxRes.json().catch(() => ({}))) as { prescription_id?: number | string }
+        console.log('[PRESCRIPTION SAVE] response prescription_id =', rxBody.prescription_id)
+        if (rxBody.prescription_id) {
+          savedPrescriptionId = rxBody.prescription_id
+        }
+      } else {
+        console.error('[PRESCRIPTION SAVE] POST /api/prescriptions failed status =', rxRes.status)
+      }
+    }
+
+    // 2. Persist PGx test result and risk assessment audit log
     const response = await fetch(GENE_RECOMMENDATION_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ drugName, diplotypes, patientId: 1, enteredByDoctorId: 1, persist: true }),
+      body: JSON.stringify({
+        drugName,
+        diplotypes,
+        patientId: selectedPatient.patient_id,
+        enteredByDoctorId: currentHCP?.id ?? null,
+        persist: true,
+      }),
     })
     if (response.status === 401) {
       currentHCP = null
@@ -1302,16 +2033,34 @@ function syncDrugField(target: HTMLInputElement | HTMLSelectElement) {
   const field = target.dataset.field as keyof Pick<PrescriptionDrug, 'dosage' | 'frequency' | 'duration' | 'note'> | undefined
   if (!item || !field) return
 
-  const ss = target instanceof HTMLInputElement ? target.selectionStart : null
-  const se = target instanceof HTMLInputElement ? target.selectionEnd : null
   item[field] = target.value
-  render()
 
-  const rep = [...document.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field]')]
-    .find(el => el.dataset.id === id && el.dataset.field === field)
-  if (!rep) return
-  rep.focus()
-  if (rep instanceof HTMLInputElement && ss !== null && se !== null) rep.setSelectionRange(ss, se)
+  // Update specific drug form's completion badge & hint without full page re-render
+  const formEl = target.closest('.drug-form')
+  if (formEl) {
+    const statusEl = formEl.querySelector('.detail-status')
+    const helpEl = formEl.querySelector<HTMLElement>('.field-help')
+    const complete = isComplete(item)
+    if (statusEl) {
+      statusEl.className = `detail-status ${complete ? 'complete' : ''}`
+      statusEl.innerHTML = complete ? `${icon('check')} Complete` : 'Details needed'
+    }
+    if (helpEl) {
+      helpEl.style.display = complete ? 'none' : 'block'
+    }
+  }
+
+  // Update completion note & submit button state live
+  const completionNote = document.querySelector('.completion-note')
+  if (completionNote) {
+    completionNote.textContent = allComplete()
+      ? 'All treatment details are complete.'
+      : items.length
+      ? 'Complete dosage, frequency, and duration for each medicine.'
+      : 'Add at least one medicine to continue.'
+  }
+
+  syncUploadState()
 }
 
 // ── Event listeners ────────────────────────────────────────────────────────────
@@ -1319,8 +2068,21 @@ app.addEventListener('input', event => {
   const target = event.target as HTMLInputElement | HTMLSelectElement | null
   if (!target) return
 
+  if (target.id === 'patient-search-input') {
+    patientSearchQuery = target.value
+    void searchPatients(patientSearchQuery)
+    return
+  }
+
   if (target.id === 'drug-search') {
-    query = target.value; syncSearchSuggestions(); return
+    query = target.value
+    syncSearchSuggestions()
+    const gridWrap = document.querySelector('.catalogue-grid-wrap')
+    if (gridWrap) {
+      const catalogue = getCatalogueDrugs(query, CATALOG_LIMIT)
+      gridWrap.innerHTML = renderCatalogue(catalogue)
+    }
+    return
   }
 
   if (target.matches('[data-action="diplotype-input"]')) {
@@ -1365,6 +2127,20 @@ app.addEventListener('change', event => {
   }
 })
 
+app.addEventListener('submit', event => {
+  const target = event.target as HTMLFormElement | null
+  if (target?.id === 'create-patient-form') {
+    event.preventDefault()
+    const fnEl = document.querySelector<HTMLInputElement>('#patient-full-name')
+    const dobEl = document.querySelector<HTMLInputElement>('#patient-dob')
+    const sexEl = document.querySelector<HTMLSelectElement>('#patient-sex')
+    const fn = (fnEl?.value ?? '').trim()
+    const dob = (dobEl?.value ?? '').trim()
+    const sex = (sexEl?.value ?? '').trim()
+    void submitCreatePatient(fn, dob, sex)
+  }
+})
+
 app.addEventListener('focusin', event => {
   const target = event.target as HTMLElement | null
   if (target?.id !== 'drug-search') return
@@ -1402,6 +2178,67 @@ app.addEventListener('click', event => {
   // inputs/selects that are already in the prescription list.
   const id = actionEl?.dataset.id ?? actionEl?.closest<HTMLElement>('[data-id]')?.dataset.id
 
+  if (action === 'open-create-patient-modal') {
+    console.log('[PATIENT MODAL] Add New Patient clicked')
+    showCreatePatientModal = true
+    createPatientError = ''
+    render()
+    console.log('[PATIENT MODAL] modal opened')
+    return
+  }
+
+  if (action === 'close-modal-backdrop') {
+    if (target === actionEl) {
+      console.log('[PATIENT MODAL] backdrop clicked -> closing modal')
+      showCreatePatientModal = false
+      createPatientError = ''
+      render()
+    }
+    return
+  }
+
+  if (action === 'close-create-patient-modal') {
+    console.log('[PATIENT MODAL] close / cancel clicked -> closing modal')
+    showCreatePatientModal = false
+    createPatientError = ''
+    render()
+    return
+  }
+
+  if (action === 'submit-create-patient') {
+    const fnEl = document.querySelector<HTMLInputElement>('#patient-full-name')
+    const dobEl = document.querySelector<HTMLInputElement>('#patient-dob')
+    const sexEl = document.querySelector<HTMLSelectElement>('#patient-sex')
+    const fn = (fnEl?.value ?? '').trim()
+    const dob = (dobEl?.value ?? '').trim()
+    const sex = (sexEl?.value ?? '').trim()
+    void submitCreatePatient(fn, dob, sex)
+    return
+  }
+
+  if (action === 'select-patient') {
+    const patientIdStr = actionEl?.dataset.patientId
+    if (patientIdStr) {
+      const pId = parseInt(patientIdStr, 10)
+      const match = patientSearchResults.find(p => p.patient_id === pId)
+      if (match) {
+        selectedPatient = match
+        patientSearchQuery = ''
+        patientSearchResults = []
+        render()
+      }
+    }
+    return
+  }
+
+  if (action === 'change-patient') {
+    selectedPatient = null
+    patientSearchQuery = ''
+    patientSearchResults = []
+    render()
+    return
+  }
+
   if (action === 'set-auth-mode') {
     const mode = actionEl?.dataset.mode as 'signin' | 'register' | undefined
     if (mode && mode !== authMode) {
@@ -1409,6 +2246,22 @@ app.addEventListener('click', event => {
       authError = ''
       render()
     }
+    return
+  }
+
+  if (action === 'toggle-copilot-panel') {
+    copilotCollapsed = !copilotCollapsed
+    localStorage.setItem('genemeds-copilot-collapsed', String(copilotCollapsed))
+    render()
+    return
+  }
+
+  if (action === 'toggle-theme') {
+    applyTheme(currentTheme === 'dark' ? 'light' : 'dark')
+    document.querySelectorAll<HTMLButtonElement>('.theme-toggle-btn').forEach(btn => {
+      btn.title = `Switch to ${currentTheme === 'dark' ? 'light' : 'dark'} theme`
+      btn.innerHTML = currentTheme === 'dark' ? icon('sun') : icon('moon')
+    })
     return
   }
 
@@ -1432,20 +2285,50 @@ app.addEventListener('click', event => {
   if (action === 'clear-all') { items = []; render(); return }
   if (action === 'submit-prescription') { void submitPrescription(); return }
   if (action === 'back-to-create') { step = 1; render(); return }
-  if (action === 'next-step' && submitted) { step = 3; render(); return }
+  if (action === 'next-step' && submitted) { step = 2; render(); return }
+  if (action === 'go-to-step') {
+    const sNum = parseInt(actionEl?.dataset.stepNum ?? '1', 10)
+    if (sNum === 1) { step = 1; render(); return }
+    if (sNum === 2 && (step >= 2 || submitted)) { step = 2; render(); return }
+    if (sNum === 3 && recommendationResults.length > 0) { step = 3; render(); return }
+  }
+  if (action === 'back-to-genetics') { step = 2; render(); return }
+  if (action === 'select-rec-tab') {
+    const idx = parseInt(actionEl?.dataset.index ?? '0', 10)
+    selectedRecDrugIndex = idx
+    render()
+    return
+  }
+  if (action === 'toggle-left-sec') {
+    const sec = actionEl?.dataset.sec
+    if (sec && sec in leftContextCollapsed) {
+      leftContextCollapsed[sec] = !leftContextCollapsed[sec]
+      render()
+    }
+    return
+  }
 
   if (action === 'new-prescription') {
     step = 1; submitted = false; items = []; submitError = ''; query = ''
     suggestedTests = []; diplotypeInputs = {}; labReportFile = null
     labExtractLoading = false; labExtractError = ''; ocrExtractedLines = []
     recommendationLoading = false; recommendationError = ''
-    recommendationResults = []; saveState = {}
+    recommendationResults = []; saveState = {}; savedPrescriptionId = null
     render(); return
   }
 
   if (action === 'retry-load') { void loadDrugs(); return }
   if (action === 'extract-lab-report') { void extractLabReport(); return }
   if (action === 'get-recommendation') { void getRecommendation(); return }
+
+  if (action === 'focus-search') {
+    if (step !== 1) { step = 1; render() }
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>('#drug-search')
+      if (el) { el.focus(); el.select() }
+    }, 50)
+    return
+  }
 
   if (action === 'save-recommendation') {
     const drugName = target?.closest<HTMLElement>('[data-drug]')?.dataset.drug ?? ''
@@ -1454,8 +2337,19 @@ app.addEventListener('click', event => {
   }
 })
 
+// Global keyboard shortcut (⌘K / Ctrl+K)
+window.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    if (step !== 1) { step = 1; render() }
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>('#drug-search')
+      if (el) { el.focus(); el.select() }
+    }, 50)
+  }
+})
+
 void checkAuthSession()
-mountChatWidget()
 
 // ── Response parser ────────────────────────────────────────────────────────────
 function extractSuggestedTests(value: unknown): SuggestedTest[] {

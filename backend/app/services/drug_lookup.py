@@ -37,6 +37,7 @@ class PrescriptionCreateRequest(BaseModel):
 
 	prescription_id: str = Field(..., alias="prescriptionId")
 	prescribed_at: datetime = Field(..., alias="prescribedAt")
+	patient_id: int | None = Field(default=None, alias="patientId")
 	prescribed_drugs: list[PrescriptionDrugItem] = Field(..., min_length=1, alias="prescribedDrugs")
 
 

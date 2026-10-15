@@ -12,6 +12,7 @@ from app.routes.drug_gene_lookup import router as drug_gene_lookup_router
 from app.routes.gene_recommendation import router as gene_recommendation_router
 from app.routes.prescription_upload import router as prescription_upload_router
 from app.routes.prescriptions import router as prescriptions_router
+from app.routes.patients import router as patients_router
 
 
 def _parse_cors_origins() -> list[str]:
@@ -34,6 +35,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(drugs_router)
+app.include_router(patients_router)
 app.include_router(drug_gene_lookup_router)
 app.include_router(gene_recommendation_router)
 app.include_router(prescription_upload_router)
