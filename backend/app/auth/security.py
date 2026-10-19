@@ -56,3 +56,11 @@ def decode_access_token(token: str) -> dict[str, Any]:
     secret = _get_secret_key()
     algo = _get_algorithm()
     return jwt.decode(token, secret, algorithms=[algo])
+
+def create_user_token(user_id: int) -> str:
+    """Signed JWT for the role-based user system. Role is NOT stored in the token."""
+    secret = _get_secret_key()
+    algo = _get_algorithm()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=_get_expire_minutes())
+    payload: dict[str, Any] = {"sub": str(user_id), "type": "user", "exp": expire}
+    return jwt.encode(payload, secret, algorithm=algo)
