@@ -8,8 +8,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.auth.dependencies import get_current_hcp
-from app.auth.schemas import HCPResponse
+from app.auth.user_dependencies import require_roles
+from app.auth.user_schemas import UserResponse
 from app.database import engine
 from app.services.bedrock_client import BedrockError, invoke_vision_text
 
@@ -111,7 +111,7 @@ def _match_drugs(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
 @router.post("/prescriptions/upload-extract")
 async def upload_extract(
     file: UploadFile,
-    current_hcp: HCPResponse = Depends(get_current_hcp),
+     current_user: UserResponse = Depends(require_roles("doctor")),
 ) -> Any:
     try:
         if file.content_type not in _ALLOWED_CONTENT_TYPES:
