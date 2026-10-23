@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from app.auth.user_dependencies import require_roles
+from app.auth.user_schemas import UserResponse
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -39,7 +41,7 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/chat")
-def chat(payload: ChatRequest) -> Any:
+def chat(payload: ChatRequest, user: UserResponse = Depends(require_roles("doctor", "admin"))) -> Any:
     # Keep only the most recent turns — this is a lightweight assistant, not a
     # long-running case history, and it keeps token usage bounded.
     trimmed = payload.messages[-_MAX_HISTORY_MESSAGES:]

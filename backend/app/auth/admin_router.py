@@ -13,6 +13,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.auth.user_dependencies import require_roles
 from app.auth.user_schemas import UserResponse
 from app.database import engine
+from app.services.common import CLINIC_TZ, like_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -66,15 +67,17 @@ def _profile(row: Any) -> dict[str, Any]:
 def list_users(
     status_filter: Literal["pending", "active", "suspended", "rejected"] | None = Query(None, alias="status"),
     role: Literal["doctor", "receptionist"] | None = Query(None),
+    q: str = Query("", max_length=100),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     admin: UserResponse = Depends(require_roles("admin")),
 ) -> dict[str, Any]:
+    q = q.strip()
     query = text(
         """
         SELECT
             ua.id, ua.full_name, ua.email, ua.phone, ua.role, ua.status,
-            ua.created_at, ua.approved_at, ua.approved_by,
+            ua.created_at, ua.approved_at, ua.approved_by, ua.last_login_at,
             dp.registration_number,
             dp.degrees AS doctor_degrees,
             dp.hospital_name AS doctor_hospital_name,
@@ -89,6 +92,7 @@ def list_users(
         WHERE ua.role IN ('doctor', 'receptionist')
           AND (CAST(:status AS text) IS NULL OR ua.status = CAST(:status AS text))
           AND (CAST(:role AS text) IS NULL OR ua.role = CAST(:role AS text))
+          AND (CAST(:q AS text) = '' OR ua.full_name ILIKE :like ESCAPE '!' OR ua.email ILIKE :like ESCAPE '!')
         ORDER BY ua.created_at DESC, ua.id DESC
         LIMIT :limit OFFSET :offset
         """
@@ -97,7 +101,7 @@ def list_users(
         with engine.connect() as conn:
             rows = conn.execute(
                 query,
-                {"status": status_filter, "role": role, "limit": limit, "offset": offset},
+                {"status": status_filter, "role": role, "q": q, "like": like_pattern(q), "limit": limit, "offset": offset},
             ).mappings().all()
     except SQLAlchemyError:
         logger.exception("Admin user listing failed")
@@ -114,6 +118,7 @@ def list_users(
             "createdAt": _iso(row["created_at"]),
             "approvedAt": _iso(row["approved_at"]),
             "approvedBy": row["approved_by"],
+            "lastLoginAt": _iso(row["last_login_at"]),
             "profile": _profile(row),
         }
         for row in rows
@@ -308,3 +313,36 @@ def list_audit_logs(
     ]
     total = rows[0]["total"] if rows else 0
     return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@router.get("/stats")
+def stats(admin: UserResponse = Depends(require_roles("admin"))) -> dict[str, Any]:
+    query = text(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE role IN ('doctor','receptionist'))                          AS staff_total,
+            COUNT(*) FILTER (WHERE role IN ('doctor','receptionist') AND status = 'active')    AS staff_active,
+            COUNT(*) FILTER (WHERE role IN ('doctor','receptionist') AND status = 'pending')   AS pending,
+            COUNT(*) FILTER (WHERE role = 'doctor')                                            AS doctors,
+            COUNT(*) FILTER (WHERE role = 'doctor' AND status = 'active')                      AS doctors_active,
+            COUNT(*) FILTER (WHERE role = 'receptionist')                                      AS receptionists,
+            COUNT(*) FILTER (WHERE role = 'receptionist' AND status = 'active')                AS receptionists_active,
+            COUNT(*) FILTER (WHERE role = 'admin')                                             AS admins,
+            (SELECT COUNT(*) FROM core.patient)                                                AS patients,
+            (SELECT COUNT(*) FROM core.visit
+              WHERE (created_at AT TIME ZONE CAST(:tz AS text))::date = (now() AT TIME ZONE CAST(:tz AS text))::date) AS visits_today
+        FROM core.user_account
+        """
+    )
+    try:
+        with engine.connect() as conn:
+            r = conn.execute(query, {"tz": CLINIC_TZ}).mappings().one()
+    except SQLAlchemyError:
+        logger.exception("Admin stats failed")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not load the overview.")
+    return {
+        "staffTotal": r["staff_total"], "staffActive": r["staff_active"], "pending": r["pending"],
+        "doctors": r["doctors"], "doctorsActive": r["doctors_active"],
+        "receptionists": r["receptionists"], "receptionistsActive": r["receptionists_active"],
+        "admins": r["admins"], "patients": r["patients"], "visitsToday": r["visits_today"],
+    }
