@@ -14,7 +14,7 @@ import { age } from '../../lib/receptionApi'
 import { getHistory, getRx } from '../../lib/rxApi'
 import { ErrorBox } from '../admin/ui'
 import { ChatWidget } from './ChatWidget'
-import { GeneStep } from './GeneStep'
+import { GeneStep, type DiagnosticData } from './GeneStep'
 import { HistoryPanel } from './HistoryPanel'
 import { PrescriptionStep } from './PrescriptionStep'
 import { ReviewStep } from './ReviewStep'
@@ -29,6 +29,23 @@ export function VisitPage() {
   const [tab, setTab] = useState<'visit' | 'history'>('visit')
   const [step, setStep] = useState(1)
   const [confirm, setConfirm] = useState(false)
+
+  const [diag, setDiag] = useState<DiagnosticData>(() => {
+    try {
+      const raw = sessionStorage.getItem(`gm_diag_${id}`)
+      return raw ? JSON.parse(raw) : { tests: [], diplotypes: {}, results: [] }
+    } catch {
+      return { tests: [], diplotypes: {}, results: [] }
+    }
+  })
+
+  const handleDiagNext = (data: DiagnosticData) => {
+    setDiag(data)
+    try {
+      sessionStorage.setItem(`gm_diag_${id}`, JSON.stringify(data))
+    } catch {}
+    setStep(3)
+  }
 
   const q = useQuery({ queryKey: ['doctor', 'visit', id], queryFn: () => getVisit(id), enabled: valid })
   const rxq = useQuery({ queryKey: ['doctor', 'rx', id], queryFn: () => getRx(id), enabled: valid })
@@ -93,9 +110,26 @@ export function VisitPage() {
             <div className="grid gap-5">
               {status === 'in_consultation' && <Stepper steps={['Prescription', 'Gene analysis', 'Review']} current={current} canGo={canGo} onGo={setStep} />}
               {current === 1 && rxq.isSuccess && <PrescriptionStep visit={d} saved={rx} doctorName={name} onSaved={n => setStep(n)} />}
-              {current === 2 && rx && <GeneStep visit={d} rx={rx} onBack={() => setStep(1)} onNext={() => setStep(3)} />}
+              {current === 2 && rx && (
+                <GeneStep
+                  visit={d}
+                  rx={rx}
+                  initialData={diag}
+                  onBack={() => setStep(1)}
+                  onNext={handleDiagNext}
+                />
+              )}
               {current === 3 && (rxq.isSuccess || status === 'completed') && (
-                <ReviewStep visit={d} rx={rx} doctorName={name} status={d.visit.status} finishing={finish.isPending} onBack={() => setStep(rx ? 2 : 1)} onFinish={() => setConfirm(true)} />
+                <ReviewStep
+                  visit={d}
+                  rx={rx}
+                  doctorName={name}
+                  status={d.visit.status}
+                  finishing={finish.isPending}
+                  diagnosticData={diag}
+                  onBack={() => setStep(rx ? 2 : 1)}
+                  onFinish={() => setConfirm(true)}
+                />
               )}
             </div>
           )}

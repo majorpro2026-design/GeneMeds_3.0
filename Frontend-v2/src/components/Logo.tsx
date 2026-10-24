@@ -1,33 +1,114 @@
 import { useId } from 'react'
 
-type Tone = 'light' | 'splash' |'dark'
-const WORD: Record<Tone, [string, string]> = {
-  light: ['text-navy', 'text-violet'],
-  splash: ['text-navy', 'text-white'],
-  dark: ['text-white', 'text-gold'],
+type Tone = 'light' | 'splash' | 'dark'
+
+const WORD: Record<Tone, { gene: string; meds: string; rung: string; strand2Start: string; strand2End: string }> = {
+  light: {
+    gene: 'text-navy',
+    meds: 'text-violet',
+    rung: 'rgba(109, 74, 216, 0.35)',
+    strand2Start: '#7C3AED',
+    strand2End: '#5B21B6',
+  },
+  splash: {
+    gene: 'text-navy',
+    meds: 'text-white',
+    rung: 'rgba(255, 255, 255, 0.55)',
+    strand2Start: '#FFFFFF',
+    strand2End: '#E9E3FB',
+  },
+  dark: {
+    gene: 'text-white',
+    meds: 'text-amber-400',
+    rung: 'rgba(255, 255, 255, 0.4)',
+    strand2Start: '#FFFFFF',
+    strand2End: '#F4F1FD',
+  },
 }
 
-export function Logo({ size = 40, wordmark = true, tone = 'light' }: { size?: number; wordmark?: boolean; tone?: Tone }) {
-  const id = useId().replace(/:/g, '') // unique gradient ids when the logo appears twice on a page
-  const [a, b] = WORD[tone]
+export interface LogoProps {
+  size?: number
+  wordmark?: boolean
+  tone?: Tone
+  layout?: 'row' | 'col'
+  className?: string
+}
+
+export function Logo({
+  size = 36,
+  wordmark = true,
+  tone = 'light',
+  layout = 'row',
+  className = '',
+}: LogoProps) {
+  const id = useId().replace(/:/g, '')
+  const t = WORD[tone]
+
   return (
-    <span className="inline-flex flex-col items-center gap-1">
-      <svg width={size} height={size * 1.22} viewBox="0 0 120 146" role="img" aria-label="GeneMeds logo">
+    <span
+      className={`inline-flex items-center ${
+        layout === 'col' ? 'flex-col gap-1.5' : 'flex-row gap-2.5'
+      } ${className}`}
+    >
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 40 40"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        role="img"
+        aria-label="GeneMeds logo"
+        className="shrink-0"
+      >
         <defs>
-          <linearGradient id={`l${id}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#FFE08A" /><stop offset="1" stopColor="#FFB93D" /></linearGradient>
-          <linearGradient id={`r${id}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#FFB020" /><stop offset="1" stopColor="#EE7F1F" /></linearGradient>
-          <clipPath id={`a${id}`}><rect width="60" height="146" /></clipPath>
-          <clipPath id={`b${id}`}><rect x="60" width="60" height="146" /></clipPath>
+          {/* Strand 1: Warm amber/gold gradient */}
+          <linearGradient id={`gold-${id}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#FDE68A" />
+            <stop offset="35%" stopColor="#FBBF24" />
+            <stop offset="100%" stopColor="#D97706" />
+          </linearGradient>
+
+          {/* Strand 2: White (dark) or Violet (light) */}
+          <linearGradient id={`accent-${id}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={t.strand2Start} />
+            <stop offset="100%" stopColor={t.strand2End} />
+          </linearGradient>
         </defs>
-        <path d="M60 4 112 24v44c0 36-24 60-52 74C32 128 8 104 8 68V24Z" fill={`url(#l${id})`} clipPath={`url(#a${id})`} />
-        <path d="M60 4 112 24v44c0 36-24 60-52 74C32 128 8 104 8 68V24Z" fill={`url(#r${id})`} clipPath={`url(#b${id})`} />
-        <path d="M48 43H72M48 61H72M48 87H72M48 105H72" stroke="#1E1B3A" strokeOpacity=".4" strokeWidth="3.5" strokeLinecap="round" />
-        <path d="M42 30C42 52 78 52 78 74S42 96 42 118" fill="none" stroke="#1E1B3A" strokeWidth="6.5" strokeLinecap="round" />
-        <path d="M78 30C78 52 42 52 42 74S78 96 78 118" fill="none" stroke="#fff" strokeWidth="6.5" strokeLinecap="round" />
+
+        {/* Minimal connecting base-pair rungs */}
+        <line x1="15" y1="9.5" x2="25" y2="9.5" stroke={t.rung} strokeWidth="2" strokeLinecap="round" />
+        <line x1="13.5" y1="20" x2="26.5" y2="20" stroke={t.rung} strokeWidth="2.2" strokeLinecap="round" />
+        <line x1="15" y1="30.5" x2="25" y2="30.5" stroke={t.rung} strokeWidth="2" strokeLinecap="round" />
+
+        {/* Strand 2 upper segment (passing behind Strand 1 at crossing 1, y=13) */}
+        <path
+          d="M 29 6 C 27 11, 13 15, 11 20"
+          stroke={`url(#accent-${id})`}
+          strokeWidth="3.2"
+          strokeLinecap="round"
+        />
+
+        {/* Strand 1 continuous double-helix strand (amber/gold) */}
+        <path
+          d="M 11 6 C 13 11, 27 15, 29 20 C 27 25, 13 29, 11 34"
+          stroke={`url(#gold-${id})`}
+          strokeWidth="3.2"
+          strokeLinecap="round"
+        />
+
+        {/* Strand 2 lower segment (passing in front of Strand 1 at crossing 2, y=27) */}
+        <path
+          d="M 11 20 C 13 25, 27 29, 29 34"
+          stroke={`url(#accent-${id})`}
+          strokeWidth="3.2"
+          strokeLinecap="round"
+        />
       </svg>
+
       {wordmark && (
-        <span className="font-brand text-xl font-extrabold tracking-tight">
-          <span className={a}>Gene</span><span className={b}>Meds</span>
+        <span className="font-heading text-xl font-semibold tracking-tight select-none leading-none">
+          <span className={t.gene}>Gene</span>
+          <span className={t.meds}>Meds</span>
         </span>
       )}
     </span>

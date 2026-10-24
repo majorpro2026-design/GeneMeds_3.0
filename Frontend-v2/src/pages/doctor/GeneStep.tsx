@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, Check, Dna, FlaskConical, Info, TriangleAlert, Upload, type LucideIcon } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { Button } from '../../components/Button'
 import { Card } from '../../components/Card'
 import { useToast } from '../../components/Toast'
@@ -58,7 +58,25 @@ function Section({ n, title, sub, children }: { n: string; title: string; sub: s
   )
 }
 
-export function GeneStep({ visit, rx, onBack, onNext }: { visit: VisitDetail; rx: SavedRx; onBack: () => void; onNext: () => void }) {
+export type DiagnosticData = {
+  tests: SuggestedTest[]
+  diplotypes: Record<string, string>
+  results: RecResult[]
+}
+
+export function GeneStep({
+  visit,
+  rx,
+  initialData,
+  onBack,
+  onNext,
+}: {
+  visit: VisitDetail
+  rx: SavedRx
+  initialData?: DiagnosticData
+  onBack: () => void
+  onNext: (data: DiagnosticData) => void
+}) {
   const toast = useToast()
   const analysis = useQuery({ queryKey: ['doctor', 'analysis', rx.prescriptionId, rx.savedAt], queryFn: () => analyse(rx) })
   const allTests = analysis.data ?? []
@@ -67,11 +85,11 @@ export function GeneStep({ visit, rx, onBack, onNext }: { visit: VisitDetail; rx
   const genes = [...new Set(tests.map(t => t.geneSymbol))]
   const drugs = [...new Set(tests.map(t => t.drugName).filter(Boolean))]
 
-  const [dip, setDip] = useState<Record<string, string>>({})
+  const [dip, setDip] = useState<Record<string, string>>(() => initialData?.diplotypes ?? {})
   const [file, setFile] = useState<File | null>(null)
   const [lines, setLines] = useState<string[]>([])
   const [ocrError, setOcrError] = useState('')
-  const [results, setResults] = useState<RecResult[]>([])
+  const [results, setResults] = useState<RecResult[]>(() => initialData?.results ?? [])
   const [saved, setSaved] = useState<Record<string, number | null>>({})
 
   const dipsFor = (drug: string) => genesForDrug(tests, drug).filter(g => dip[g]?.trim()).map(g => ({ geneSymbol: g, diplotypeName: dip[g].trim() }))
@@ -96,11 +114,33 @@ export function GeneStep({ visit, rx, onBack, onNext }: { visit: VisitDetail; rx
     onError: e => toast(e instanceof Error ? e.message : 'Could not save.', 'error'),
   })
 
+  // Keep sessionStorage in sync so navigating via Stepper or reloading retains diagnostic data
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        `gm_diag_${visit.visit.visitId}`,
+        JSON.stringify({
+          tests,
+          diplotypes: dip,
+          results,
+        })
+      )
+    } catch {}
+  }, [tests, dip, results, visit.visit.visitId])
+
   function pick(f: File | undefined) {
     if (!f) return
     if (!['image/jpeg', 'image/png', 'image/tiff', 'image/webp'].includes(f.type)) { setOcrError('Choose a JPEG, PNG, TIFF or WebP image.'); return }
     if (f.size > 5 * 1024 * 1024) { setOcrError('The image is larger than 5 MB.'); return }
     setOcrError(''); setFile(f)
+  }
+
+  const handleNext = () => {
+    onNext({
+      tests,
+      diplotypes: dip,
+      results,
+    })
   }
 
   if (analysis.isPending) return <p role="status" className="py-10 text-center text-muted">Checking the CPIC gene-drug data…</p>
@@ -109,7 +149,7 @@ export function GeneStep({ visit, rx, onBack, onNext }: { visit: VisitDetail; rx
   const nav = (
     <div className="flex justify-between">
       <Button variant="secondary" onClick={onBack}><ArrowLeft className="size-4" aria-hidden /> Edit prescription</Button>
-      <Button onClick={onNext}>Continue to review <ArrowRight className="size-4" aria-hidden /></Button>
+      <Button onClick={handleNext}>Continue to review <ArrowRight className="size-4" aria-hidden /></Button>
     </div>
   )
   if (tests.length === 0) {

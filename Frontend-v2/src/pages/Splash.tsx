@@ -20,7 +20,7 @@ export function Splash() {
   return (
     <main className="relative grid min-h-screen place-items-center bg-[#9479E6] px-6 text-center">
       <div className="flex flex-col items-center gap-5">
-        <div className="pop"><Logo size={110} wordmark={false} /></div>
+        <div className="pop"><Logo size={110} wordmark={false} tone="splash" /></div>
         <h1 className="rise font-brand text-[clamp(52px,11vw,104px)] font-extrabold leading-none tracking-tighter" style={{ animationDelay: '.6s' }}>
           <span className="text-navy">Gene</span><span className="text-white">Meds</span>
         </h1>
