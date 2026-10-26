@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,6 +14,7 @@ from app.auth.user_dependencies import require_roles
 from app.auth.user_schemas import UserResponse
 from app.database import engine
 from app.services.common import CLINIC_TZ, like_pattern
+from app.services.email_service import send_welcome_email_task
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +128,13 @@ def list_users(
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
-def _change_status(user_id: int, action: str, admin: UserResponse, reason: str | None) -> dict[str, Any]:
+def _change_status(
+    user_id: int,
+    action: str,
+    admin: UserResponse,
+    reason: str | None,
+    background_tasks: BackgroundTasks | None = None,
+) -> dict[str, Any]:
     required_status, new_status = _TRANSITIONS[action]
 
     if user_id == admin.id:
@@ -146,7 +153,7 @@ def _change_status(user_id: int, action: str, admin: UserResponse, reason: str |
     try:
         with engine.begin() as conn:
             row = conn.execute(
-                text("SELECT role, status FROM core.user_account WHERE id = :id"),
+                text("SELECT role, status, full_name, email FROM core.user_account WHERE id = :id"),
                 {"id": user_id},
             ).mappings().first()
 
@@ -201,16 +208,31 @@ def _change_status(user_id: int, action: str, admin: UserResponse, reason: str |
         logger.exception("Status change failed (user_id=%s, action=%s)", user_id, action)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Could not update the account.")
 
+    # Schedule welcome email only after database transaction is successfully committed
+    if action == "approve" and background_tasks is not None and row.get("email"):
+        background_tasks.add_task(
+            send_welcome_email_task,
+            row["email"],
+            row.get("full_name") or "Healthcare Professional",
+        )
+
     return {"id": updated["id"], "status": updated["status"], "message": f"Account {action} successful."}
 
 
 @router.post("/users/{user_id}/approve")
 def approve_user(
+    background_tasks: BackgroundTasks,
     user_id: int = Path(..., ge=1, le=MAX_BIGINT),
     payload: OptionalDecisionRequest | None = None,
     admin: UserResponse = Depends(require_roles("admin")),
 ) -> dict[str, Any]:
-    return _change_status(user_id, "approve", admin, (payload.reason if payload else None) or None)
+    return _change_status(
+        user_id,
+        "approve",
+        admin,
+        (payload.reason if payload else None) or None,
+        background_tasks=background_tasks,
+    )
 
 
 @router.post("/users/{user_id}/reject")
